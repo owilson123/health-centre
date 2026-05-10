@@ -98,6 +98,17 @@ def clear_sleep_data():
     return {"status": "cleared", "message": "Sleep data wiped. Pull to refresh on the app to re-sync."}
 
 
+@app.get("/admin/recalculate-strain")
+def recalculate_strain(days: int = 90):
+    """Recalculate and write strain for all activities in DB without re-syncing from Garmin."""
+    from datetime import date, timedelta
+    from garmin_sync import _backfill_strain
+    end = date.today()
+    start = end - timedelta(days=days)
+    _backfill_strain(start, end)
+    return {"status": "done", "message": f"Strain recalculated for {days} days ending {end}"}
+
+
 # ─── sync ───────────────────────────────────────────────────────────
 
 def _should_sync() -> bool:
