@@ -41,25 +41,23 @@ def get_client() -> Garmin:
         if not creds:
             raise RuntimeError("No Garmin credentials configured.")
         email, password = creds
-        _client = Garmin(email, password, tokenstore=str(TOKEN_PATH))
+        _client = Garmin(email, password)
         try:
-            # Try resuming saved session first — avoids triggering rate limits
+            TOKEN_PATH.mkdir(parents=True, exist_ok=True)
             _client.login(str(TOKEN_PATH))
             logger.info("Garmin session resumed from token")
         except Exception:
-            # Fall back to full login and save the token for next time
             logger.info("No saved session, doing full Garmin login")
             _client.login()
-            TOKEN_PATH.mkdir(parents=True, exist_ok=True)
         logger.info("Garmin client ready")
     return _client
 
 
 def test_credentials(email: str, password: str) -> Garmin:
     """Attempt a login with the given credentials, save session token. Returns client."""
-    client = Garmin(email, password, tokenstore=str(TOKEN_PATH))
-    client.login()
     TOKEN_PATH.mkdir(parents=True, exist_ok=True)
+    client = Garmin(email, password)
+    client.login(str(TOKEN_PATH))
     logger.info("Garmin credentials verified and session saved")
     return client
 
