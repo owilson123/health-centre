@@ -343,15 +343,45 @@ def calc_strain_score(target_date: date = None, recovery_score: int = 50) -> dic
         total_load = 0.0
         zone_totals = {1: 0, 2: 0, 3: 0, 4: 0, 5: 0}
 
+        rhr_row = conn.execute(
+            "SELECT resting_hr FROM steps WHERE date=? AND resting_hr IS NOT NULL",
+            (target_date.isoformat(),)
+        ).fetchone()
+        rhr = (rhr_row[0] if rhr_row else None) or 60
+
         for a in activities:
             act = dict(a)
             mult = TYPE_MULTIPLIERS.get(act["type"], 0.9)
-            for z in range(1, 6):
-                secs = act.get(f"zone{z}_seconds", 0) or 0
-                zone_totals[z] += secs
-                total_load += secs * ZONE_WEIGHTS[z] * mult
+            zone_secs_total = sum((act.get(f"zone{z}_seconds", 0) or 0) for z in range(1, 6))
 
-            # Secondary: Training Effect bonus
+            if zone_secs_total > 0:
+                # Use zone breakdown when available
+                for z in range(1, 6):
+                    secs = act.get(f"zone{z}_seconds", 0) or 0
+                    zone_totals[z] += secs
+                    total_load += secs * ZONE_WEIGHTS[z] * mult
+            else:
+                # Fallback: TRIMP from avg_hr + duration
+                avg_hr = act.get("avg_hr") or 0
+                duration = act.get("duration_seconds") or 0
+                if avg_hr > 0 and duration > 0:
+                    hr_reserve = _clamp((avg_hr - rhr) / max(max_hr - rhr, 1), 0, 1)
+                    trimp = (duration / 60) * hr_reserve * 0.64 * math.exp(1.92 * hr_reserve)
+                    # Calibrate: TRIMP ~100 for a moderate 60min run ≈ 50 strain
+                    # MAX_LOAD = 28800 units; TRIMP 100 → load ~14400 → 50 strain
+                    total_load += trimp * 144 * mult
+
+                    # Approximate zone distribution for display
+                    if hr_reserve < 0.5:
+                        zone_totals[2] += duration
+                    elif hr_reserve < 0.7:
+                        zone_totals[3] += duration
+                    elif hr_reserve < 0.85:
+                        zone_totals[4] += duration
+                    else:
+                        zone_totals[5] += duration
+
+            # Training Effect bonus
             te = act.get("training_effect") or 0
             if te > 0:
                 total_load += te * 60
@@ -365,10 +395,21 @@ def calc_strain_score(target_date: date = None, recovery_score: int = 50) -> dic
         for a in activities:
             act = dict(a)
             mult = TYPE_MULTIPLIERS.get(act["type"], 0.9)
-            act_load = sum(
-                (act.get(f"zone{z}_seconds", 0) or 0) * ZONE_WEIGHTS[z] * mult
-                for z in range(1, 6)
-            )
+            zone_secs_total = sum((act.get(f"zone{z}_seconds", 0) or 0) for z in range(1, 6))
+            if zone_secs_total > 0:
+                act_load = sum(
+                    (act.get(f"zone{z}_seconds", 0) or 0) * ZONE_WEIGHTS[z] * mult
+                    for z in range(1, 6)
+                )
+            else:
+                avg_hr = act.get("avg_hr") or 0
+                duration = act.get("duration_seconds") or 0
+                if avg_hr > 0 and duration > 0:
+                    hr_reserve = _clamp((avg_hr - rhr) / max(max_hr - rhr, 1), 0, 1)
+                    trimp = (duration / 60) * hr_reserve * 0.64 * math.exp(1.92 * hr_reserve)
+                    act_load = trimp * 144 * mult
+                else:
+                    act_load = 0
             act_strain = _clamp((act_load / MAX_LOAD) * 100)
             conn.execute("UPDATE activities SET strain=? WHERE id=?", (act_strain, act["id"]))
 
