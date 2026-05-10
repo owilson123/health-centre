@@ -89,13 +89,13 @@ def disconnect_garmin():
     return {"status": "disconnected"}
 
 
-@app.post("/admin/clear-sleep")
+@app.get("/admin/clear-sleep")
 def clear_sleep_data():
-    """Wipe all cached sleep data and force a fresh sync."""
+    """Wipe all cached sleep data so next sync pulls fresh."""
     with db() as conn:
         conn.execute("DELETE FROM sleep")
         conn.execute("DELETE FROM sync_log")
-    return {"status": "cleared"}
+    return {"status": "cleared", "message": "Sleep data wiped. Pull to refresh on the app to re-sync."}
 
 
 # ─── sync ───────────────────────────────────────────────────────────
