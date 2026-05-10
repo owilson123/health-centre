@@ -137,9 +137,16 @@ def get_dashboard():
             logger.warning(f"Auto-sync failed: {e}")
 
     today = date.today()
-    yesterday = today - timedelta(days=1)
 
-    sleep = calc_sleep_score(yesterday)
+    # Garmin files sleep under the date it *ends*, so the most recent sleep
+    # record is today's date if it exists, otherwise yesterday's.
+    with db() as conn:
+        has_today_sleep = conn.execute(
+            "SELECT 1 FROM sleep WHERE date=? AND total_sleep_seconds > 0", (today.isoformat(),)
+        ).fetchone()
+    sleep_date = today if has_today_sleep else today - timedelta(days=1)
+
+    sleep = calc_sleep_score(sleep_date)
     recovery = calc_recovery_score(today, sleep_score=sleep["score"])
     strain = calc_strain_score(today, recovery_score=recovery["score"])
     calories = calc_calories(today)
