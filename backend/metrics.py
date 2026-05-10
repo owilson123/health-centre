@@ -148,6 +148,11 @@ def calc_sleep_score(target_date: date = None) -> dict:
         }
 
 
+def _cap(s: str) -> str:
+    """Uppercase first character only, preserving the rest (e.g. HRV, REM stay intact)."""
+    return s[0].upper() + s[1:] if s else s
+
+
 def _sleep_insight(c: dict, deep_pct: float, rem_pct: float, hrv: Optional[float], avg_hrv: Optional[float]) -> str:
     parts = []
     if c["deep_sleep"] >= 80:
@@ -167,7 +172,7 @@ def _sleep_insight(c: dict, deep_pct: float, rem_pct: float, hrv: Optional[float
         parts.append("sleep efficiency was low")
     if not parts:
         return "Sleep quality was average across all components."
-    return ". ".join(p.capitalize() for p in parts) + "."
+    return ". ".join(_cap(p) for p in parts) + "."
 
 
 # ─────────────────────────── recovery score ───────────────────────────
@@ -317,7 +322,7 @@ def _recovery_insight(c: dict, acwr: float, acwr_label: str, hrv: Optional[float
         parts.append("training load is low — you may be undertraining")
     if not parts:
         return "Recovery is tracking well. You're in a good position to train."
-    return ". ".join(p.capitalize() for p in parts) + "."
+    return ". ".join(_cap(p) for p in parts) + "."
 
 
 # ─────────────────────────── strain score ───────────────────────────
