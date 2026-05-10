@@ -4,8 +4,6 @@ import { useState, useEffect, useCallback } from 'react'
 import { api } from './api'
 import { DashboardData, Activity, TrendDataPoint } from './types'
 
-const SYNC_INTERVAL_MS = 30 * 60 * 1000
-
 export function useDashboard() {
   const [data, setData] = useState<DashboardData | null>(null)
   const [loading, setLoading] = useState(true)
@@ -22,7 +20,7 @@ export function useDashboard() {
       const d = await api.getDashboard()
       setData(d)
       setError(null)
-    } catch (e) {
+    } catch {
       setError('Could not load health data. Is the backend running?')
     } finally {
       setLoading(false)

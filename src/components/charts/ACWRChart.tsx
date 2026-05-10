@@ -5,6 +5,7 @@ import {
 } from 'recharts'
 import { TrendDataPoint } from '@/lib/types'
 
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
 const CustomTooltip = ({ active, payload, label }: any) => {
   if (!active || !payload?.length) return null
   const v = payload[0].value as number

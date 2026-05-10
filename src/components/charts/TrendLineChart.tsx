@@ -1,7 +1,7 @@
 'use client'
 
 import {
-  AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer, ReferenceLine
+  AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer
 } from 'recharts'
 import { TrendDataPoint } from '@/lib/types'
 
@@ -9,9 +9,10 @@ interface Props {
   data: TrendDataPoint[]
   dataKey: keyof TrendDataPoint
   color: string
-  invertGood?: boolean
+  invertGood?: boolean // reserved for future use
 }
 
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
 const CustomTooltip = ({ active, payload, label }: any) => {
   if (!active || !payload?.length) return null
   return (
@@ -22,7 +23,7 @@ const CustomTooltip = ({ active, payload, label }: any) => {
   )
 }
 
-export function TrendLineChart({ data, dataKey, color, invertGood }: Props) {
+export function TrendLineChart({ data, dataKey, color }: Props) {
   const filtered = data.filter(d => d[dataKey] != null)
   const formatted = filtered.map(d => ({
     date: new Date(d.date).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' }),

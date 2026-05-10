@@ -50,3 +50,5 @@ backend/.env
 # Icons (SVG placeholders, not tracked)
 public/icons/*.svg
 
+
+.vercel

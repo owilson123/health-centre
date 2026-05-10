@@ -8,7 +8,7 @@ import { GlassCard } from '@/components/ui/GlassCard'
 import { SkeletonRing, SkeletonCard } from '@/components/ui/SkeletonCard'
 import { EmptyState } from '@/components/ui/EmptyState'
 import { useDashboard } from '@/lib/hooks'
-import { getGreeting, scoreColor, scoreLabel, formatDuration } from '@/lib/utils'
+import { getGreeting, scoreColor, scoreLabel } from '@/lib/utils'
 
 function CalorieArc({ current, predicted }: { current: number; predicted: number }) {
   const pct = Math.min(current / Math.max(predicted, 1), 1)

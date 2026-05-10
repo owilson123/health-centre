@@ -4,28 +4,30 @@ import { motion } from 'framer-motion'
 import { SleepData } from '@/lib/types'
 import { formatDuration } from '@/lib/utils'
 
-const stages = [
+type SecondKey = 'deep_sleep_seconds' | 'rem_sleep_seconds' | 'light_sleep_seconds' | 'awake_seconds'
+
+const stages: { key: SecondKey; label: string; color: string }[] = [
   { key: 'deep_sleep_seconds', label: 'Deep', color: '#4f46e5' },
   { key: 'rem_sleep_seconds', label: 'REM', color: '#7c3aed' },
   { key: 'light_sleep_seconds', label: 'Light', color: '#3b82f6' },
   { key: 'awake_seconds', label: 'Awake', color: '#ef4444' },
-] as const
+]
 
 export function SleepStageBar({ data }: { data: SleepData }) {
   const total =
-    data.deep_sleep_seconds +
-    data.rem_sleep_seconds +
-    data.light_sleep_seconds +
-    data.awake_seconds
+    (data.deep_sleep_seconds || 0) +
+    (data.rem_sleep_seconds || 0) +
+    (data.light_sleep_seconds || 0) +
+    (data.awake_seconds || 0)
 
   if (!total) return null
 
   return (
     <div className="space-y-3">
-      {/* Stacked bar */}
       <div className="flex h-8 rounded-xl overflow-hidden gap-0.5">
-        {stages.map(({ key, label, color }) => {
-          const pct = (data[key] / total) * 100
+        {stages.map(({ key, color }) => {
+          const secs = data[key] || 0
+          const pct = (secs / total) * 100
           if (pct < 1) return null
           return (
             <motion.div
@@ -39,10 +41,9 @@ export function SleepStageBar({ data }: { data: SleepData }) {
           )
         })}
       </div>
-      {/* Legend */}
       <div className="flex flex-wrap gap-3">
         {stages.map(({ key, label, color }) => {
-          const secs = data[key]
+          const secs = data[key] || 0
           const pct = Math.round((secs / total) * 100)
           return (
             <div key={key} className="flex items-center gap-1.5">
