@@ -8,7 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 from database import init_db, db
-from garmin_sync import sync_all
+from garmin_sync import sync_all, test_credentials, get_stored_credentials, reset_client
 from metrics import calc_sleep_score, calc_recovery_score, calc_strain_score, calc_calories
 
 logging.basicConfig(level=logging.INFO)
@@ -29,6 +29,56 @@ app.add_middleware(
 def startup():
     init_db()
     logger.info("Database initialised")
+
+
+# ─── garmin auth ────────────────────────────────────────────────────
+
+class GarminCredentials(BaseModel):
+    email: str
+    password: str
+
+
+@app.get("/auth/status")
+def auth_status():
+    """Returns whether Garmin credentials are stored."""
+    creds = get_stored_credentials()
+    if creds:
+        with db() as conn:
+            row = conn.execute("SELECT connected_at FROM credentials WHERE id=1").fetchone()
+        return {"connected": True, "email": creds[0], "connected_at": row[0] if row else None}
+    return {"connected": False}
+
+
+@app.post("/auth/connect")
+def connect_garmin(creds: GarminCredentials, background_tasks: BackgroundTasks):
+    """Validate Garmin credentials and store them, then kick off initial sync."""
+    try:
+        test_credentials(creds.email, creds.password)
+    except Exception as e:
+        raise HTTPException(status_code=401, detail=f"Garmin login failed: {str(e)}")
+
+    with db() as conn:
+        conn.execute("""
+            INSERT INTO credentials (id, garmin_email, garmin_password, connected_at)
+            VALUES (1, ?, ?, datetime('now'))
+            ON CONFLICT(id) DO UPDATE SET
+                garmin_email=excluded.garmin_email,
+                garmin_password=excluded.garmin_password,
+                connected_at=excluded.connected_at
+        """, (creds.email, creds.password))
+
+    reset_client()
+    background_tasks.add_task(_do_sync)
+    return {"status": "connected", "email": creds.email}
+
+
+@app.post("/auth/disconnect")
+def disconnect_garmin():
+    """Remove stored credentials."""
+    with db() as conn:
+        conn.execute("DELETE FROM credentials WHERE id=1")
+    reset_client()
+    return {"status": "disconnected"}
 
 
 # ─── sync ───────────────────────────────────────────────────────────

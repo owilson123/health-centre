@@ -1,6 +1,7 @@
 import type { Metadata, Viewport } from 'next'
 import { Inter } from 'next/font/google'
 import './globals.css'
+import { AuthGate } from '@/components/layout/AuthGate'
 import { BottomNav } from '@/components/layout/BottomNav'
 
 const inter = Inter({ subsets: ['latin'], variable: '--font-inter' })
@@ -39,10 +40,12 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         <meta name="apple-mobile-web-app-title" content="Health Centre" />
       </head>
       <body className={`${inter.variable} font-sans bg-[#0a0a0a] text-white antialiased`}>
-        <main className="min-h-screen pb-[calc(4rem+env(safe-area-inset-bottom))]">
-          {children}
-        </main>
-        <BottomNav />
+        <AuthGate>
+          <main className="min-h-screen pb-[calc(4rem+env(safe-area-inset-bottom))]">
+            {children}
+          </main>
+          <BottomNav />
+        </AuthGate>
       </body>
     </html>
   )

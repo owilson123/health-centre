@@ -110,4 +110,11 @@ def init_db():
             status TEXT,
             message TEXT
         );
+
+        CREATE TABLE IF NOT EXISTS credentials (
+            id INTEGER PRIMARY KEY CHECK (id = 1),
+            garmin_email TEXT NOT NULL,
+            garmin_password TEXT NOT NULL,
+            connected_at TEXT DEFAULT (datetime('now'))
+        );
         """)

@@ -1,8 +1,9 @@
 'use client'
 
-import { useCallback, useRef } from 'react'
-import { motion } from 'framer-motion'
-import { RefreshCw, Clock, Zap, TrendingUp, TrendingDown, Minus } from 'lucide-react'
+import { useCallback, useRef, useState } from 'react'
+import { motion, AnimatePresence } from 'framer-motion'
+import { RefreshCw, Clock, Zap, TrendingUp, TrendingDown, Minus, Settings, LogOut, X } from 'lucide-react'
+import { api } from '@/lib/api'
 import { ScoreRing } from '@/components/ui/ScoreRing'
 import { GlassCard } from '@/components/ui/GlassCard'
 import { SkeletonRing, SkeletonCard } from '@/components/ui/SkeletonCard'
@@ -45,6 +46,12 @@ function ACWRBadge({ acwr, label }: { acwr: number; label: string }) {
 export default function OverviewPage() {
   const { data, loading, syncing, error, refresh } = useDashboard()
   const touchStartY = useRef(0)
+  const [showSettings, setShowSettings] = useState(false)
+
+  const handleDisconnect = useCallback(async () => {
+    await api.disconnectGarmin()
+    window.location.reload()
+  }, [])
 
   const onTouchStart = useCallback((e: React.TouchEvent) => {
     touchStartY.current = e.touches[0].clientY
@@ -70,14 +77,52 @@ export default function OverviewPage() {
           <p className="text-sm text-white/40">{new Date().toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long' })}</p>
           <h1 className="text-2xl font-bold mt-0.5">{getGreeting()}, Olly</h1>
         </div>
-        <button
-          onClick={refresh}
-          disabled={syncing}
-          className="w-10 h-10 flex items-center justify-center rounded-full glass active:scale-95 transition-transform"
-        >
-          <RefreshCw size={16} className={syncing ? 'animate-spin text-white/60' : 'text-white/60'} />
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={refresh}
+            disabled={syncing}
+            className="w-10 h-10 flex items-center justify-center rounded-full glass active:scale-95 transition-transform"
+          >
+            <RefreshCw size={16} className={syncing ? 'animate-spin text-white/60' : 'text-white/60'} />
+          </button>
+          <button
+            onClick={() => setShowSettings(s => !s)}
+            className="w-10 h-10 flex items-center justify-center rounded-full glass active:scale-95 transition-transform"
+          >
+            <Settings size={16} className="text-white/60" />
+          </button>
+        </div>
       </div>
+
+      {/* Settings drawer */}
+      <AnimatePresence>
+        {showSettings && (
+          <motion.div
+            initial={{ opacity: 0, y: -8 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -8 }}
+            transition={{ duration: 0.2 }}
+            className="glass-card p-4 mb-4"
+          >
+            <div className="flex items-center justify-between mb-3">
+              <p className="text-xs text-white/40 uppercase tracking-wider">Settings</p>
+              <button onClick={() => setShowSettings(false)} className="text-white/30 active:text-white/60">
+                <X size={16} />
+              </button>
+            </div>
+            <button
+              onClick={handleDisconnect}
+              className="flex items-center gap-3 w-full p-3 rounded-xl bg-red-500/10 border border-red-500/20 active:bg-red-500/20 transition-colors"
+            >
+              <LogOut size={15} className="text-red-400" />
+              <div className="text-left">
+                <p className="text-sm font-medium text-red-400">Disconnect Garmin</p>
+                <p className="text-xs text-white/30">Remove stored credentials and sign out</p>
+              </div>
+            </button>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       {error && (
         <div className="glass-card p-4 mb-4 border-red-500/20 bg-red-500/5">

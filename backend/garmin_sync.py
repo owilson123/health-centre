@@ -1,29 +1,55 @@
 """Garmin Connect data fetcher — pulls and caches 90 days of health data."""
 import os
-import json
 import logging
 from datetime import date, timedelta, datetime
 from typing import Optional
 
 from garminconnect import Garmin
-from dotenv import load_dotenv
 from database import db
 
-load_dotenv()
 logger = logging.getLogger(__name__)
 
 _client: Optional[Garmin] = None
 
 
+def get_stored_credentials() -> Optional[tuple[str, str]]:
+    """Return (email, password) from DB, or fall back to env vars."""
+    with db() as conn:
+        row = conn.execute("SELECT garmin_email, garmin_password FROM credentials WHERE id=1").fetchone()
+        if row:
+            return row[0], row[1]
+    # Env var fallback for local dev
+    email = os.environ.get("GARMIN_EMAIL")
+    password = os.environ.get("GARMIN_PASSWORD")
+    if email and password:
+        return email, password
+    return None
+
+
+def reset_client():
+    global _client
+    _client = None
+
+
 def get_client() -> Garmin:
     global _client
     if _client is None:
-        email = os.environ["GARMIN_EMAIL"]
-        password = os.environ["GARMIN_PASSWORD"]
+        creds = get_stored_credentials()
+        if not creds:
+            raise RuntimeError("No Garmin credentials configured.")
+        email, password = creds
         _client = Garmin(email, password)
         _client.login()
         logger.info("Garmin login successful")
     return _client
+
+
+def test_credentials(email: str, password: str) -> bool:
+    """Attempt a login with the given credentials. Returns True on success."""
+    client = Garmin(email, password)
+    client.login()
+    client.get_user_summary(date.today().isoformat())
+    return True
 
 
 def daterange(start: date, end: date):

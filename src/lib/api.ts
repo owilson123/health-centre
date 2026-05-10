@@ -13,4 +13,16 @@ export const api = {
   sync: () => fetch(`${BASE}/sync`, { method: 'POST' }).then(r => r.json()),
   getActivities: (days = 14) => get<Activity[]>(`/activities?days=${days}`),
   getTrends: (days = 90) => get<TrendDataPoint[]>(`/trends?days=${days}`),
+  getAuthStatus: () => get<{ connected: boolean; email?: string; connected_at?: string }>('/auth/status'),
+  connectGarmin: (email: string, password: string) =>
+    fetch(`${BASE}/auth/connect`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email, password }),
+    }).then(async r => {
+      const data = await r.json()
+      if (!r.ok) throw new Error(data.detail || 'Connection failed')
+      return data
+    }),
+  disconnectGarmin: () => fetch(`${BASE}/auth/disconnect`, { method: 'POST' }).then(r => r.json()),
 }
