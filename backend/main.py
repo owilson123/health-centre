@@ -89,6 +89,15 @@ def disconnect_garmin():
     return {"status": "disconnected"}
 
 
+@app.post("/admin/clear-sleep")
+def clear_sleep_data():
+    """Wipe all cached sleep data and force a fresh sync."""
+    with db() as conn:
+        conn.execute("DELETE FROM sleep")
+        conn.execute("DELETE FROM sync_log")
+    return {"status": "cleared"}
+
+
 # ─── sync ───────────────────────────────────────────────────────────
 
 def _should_sync() -> bool:
