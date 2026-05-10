@@ -146,8 +146,9 @@ def _sync_sleep(client: Garmin, start: date, end: date):
             daily = raw.get("dailySleepDTO", {})
             if not daily:
                 continue
-            if d == end:  # log today's raw fields to help debug
-                logger.info(f"Raw sleep keys for {d}: { {k: v for k, v in daily.items() if 'sleep' in k.lower() or 'time' in k.lower() or 'second' in k.lower()} }")
+            # Log last 2 days to help debug
+            if d >= end - timedelta(days=1):
+                logger.info(f"Sleep {d}: sleepTimeSeconds={daily.get('sleepTimeSeconds')} deep={daily.get('deepSleepSeconds')} rem={daily.get('remSleepSeconds')} light={daily.get('lightSleepSeconds')} awake={daily.get('awakeSleepSeconds')}")
 
             deep = daily.get("deepSleepSeconds", 0) or 0
             rem = daily.get("remSleepSeconds", 0) or 0
