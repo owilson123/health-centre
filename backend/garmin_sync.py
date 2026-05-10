@@ -146,18 +146,23 @@ def _sync_sleep(client: Garmin, start: date, end: date):
             daily = raw.get("dailySleepDTO", {})
             if not daily:
                 continue
+            if d == end:  # log today's raw fields to help debug
+                logger.info(f"Raw sleep keys for {d}: { {k: v for k, v in daily.items() if 'sleep' in k.lower() or 'time' in k.lower() or 'second' in k.lower()} }")
 
-            stages = {s["sleepStage"]: s["seconds"] for s in raw.get("sleepLevels", [])} if False else {}
             deep = daily.get("deepSleepSeconds", 0) or 0
             rem = daily.get("remSleepSeconds", 0) or 0
             light = daily.get("lightSleepSeconds", 0) or 0
             awake = daily.get("awakeSleepSeconds", 0) or 0
+            # Use Garmin's own total sleep time as the authority, not our sum of stages
+            total = daily.get("sleepTimeSeconds") or daily.get("totalSleepSeconds") or (deep + rem + light)
             efficiency = daily.get("sleepScores", {}).get("sleepEfficiency") or daily.get("sleepEfficiency") or 0
-            hrv = daily.get("averageSpO2HRVariability") or daily.get("avgSleepStress")
+            # HRV from the HRV summary block, not SpO2
+            hrv_summary = raw.get("hrvSummary") or {}
+            hrv = hrv_summary.get("lastNight") or hrv_summary.get("lastNight5MinHigh") or daily.get("averageHRV")
             rhr = daily.get("restingHeartRate")
-            total = deep + rem + light
             start_ts = daily.get("sleepStartTimestampGMT")
             end_ts = daily.get("sleepEndTimestampGMT")
+            logger.debug(f"Sleep {d}: total={total}s deep={deep}s rem={rem}s light={light}s awake={awake}s")
 
             with db() as conn:
                 conn.execute("""
