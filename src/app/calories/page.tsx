@@ -1,7 +1,7 @@
 'use client'
 
 import { motion } from 'framer-motion'
-import { Flame, Zap } from 'lucide-react'
+import { Flame } from 'lucide-react'
 import { GlassCard } from '@/components/ui/GlassCard'
 import { SkeletonCard } from '@/components/ui/SkeletonCard'
 import { EmptyState } from '@/components/ui/EmptyState'
