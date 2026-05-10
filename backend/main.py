@@ -56,10 +56,14 @@ def auth_status():
 def connect_garmin(creds: GarminCredentials, background_tasks: BackgroundTasks):
     """Validate Garmin credentials and store them, then kick off initial sync."""
     try:
-        test_credentials(creds.email, creds.password)
+        verified_client = test_credentials(creds.email, creds.password)
     except Exception as e:
         logger.error(f"Garmin login failed for {creds.email}: {type(e).__name__}: {str(e)}")
         raise HTTPException(status_code=401, detail=f"Garmin login failed: {type(e).__name__}: {str(e)}")
+
+    # Reuse the already-authenticated client so we don't login again immediately
+    import garmin_sync
+    garmin_sync._client = verified_client
 
     with db() as conn:
         conn.execute("""

@@ -2,14 +2,18 @@
 import os
 import logging
 from datetime import date, timedelta, datetime
+from pathlib import Path
 from typing import Optional
 
 from garminconnect import Garmin
-from database import db
+from database import db, DB_PATH
 
 logger = logging.getLogger(__name__)
 
 _client: Optional[Garmin] = None
+
+# Store session token next to the database
+TOKEN_PATH = DB_PATH.parent / "garmin_tokens"
 
 
 def get_stored_credentials() -> Optional[tuple[str, str]]:
@@ -18,7 +22,6 @@ def get_stored_credentials() -> Optional[tuple[str, str]]:
         row = conn.execute("SELECT garmin_email, garmin_password FROM credentials WHERE id=1").fetchone()
         if row:
             return row[0], row[1]
-    # Env var fallback for local dev
     email = os.environ.get("GARMIN_EMAIL")
     password = os.environ.get("GARMIN_PASSWORD")
     if email and password:
@@ -38,18 +41,27 @@ def get_client() -> Garmin:
         if not creds:
             raise RuntimeError("No Garmin credentials configured.")
         email, password = creds
-        _client = Garmin(email, password)
-        _client.login()
-        logger.info("Garmin login successful")
+        _client = Garmin(email, password, tokenstore=str(TOKEN_PATH))
+        try:
+            # Try resuming saved session first — avoids triggering rate limits
+            _client.login(str(TOKEN_PATH))
+            logger.info("Garmin session resumed from token")
+        except Exception:
+            # Fall back to full login and save the token for next time
+            logger.info("No saved session, doing full Garmin login")
+            _client.login()
+            TOKEN_PATH.mkdir(parents=True, exist_ok=True)
+        logger.info("Garmin client ready")
     return _client
 
 
-def test_credentials(email: str, password: str) -> bool:
-    """Attempt a login with the given credentials. Returns True on success."""
-    client = Garmin(email, password)
+def test_credentials(email: str, password: str) -> Garmin:
+    """Attempt a login with the given credentials, save session token. Returns client."""
+    client = Garmin(email, password, tokenstore=str(TOKEN_PATH))
     client.login()
-    client.get_user_summary(date.today().isoformat())
-    return True
+    TOKEN_PATH.mkdir(parents=True, exist_ok=True)
+    logger.info("Garmin credentials verified and session saved")
+    return client
 
 
 def daterange(start: date, end: date):
