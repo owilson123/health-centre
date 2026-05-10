@@ -1,8 +1,13 @@
+import os
 import sqlite3
 from pathlib import Path
 from contextlib import contextmanager
 
-DB_PATH = Path(__file__).parent / "health.db"
+# On Railway, set DB_PATH env var to /data/health.db (persistent volume mounted at /data)
+# Locally defaults to backend/health.db
+_db_env = os.environ.get("DB_PATH")
+DB_PATH = Path(_db_env) if _db_env else Path(__file__).parent / "health.db"
+DB_PATH.parent.mkdir(parents=True, exist_ok=True)
 
 
 def get_conn() -> sqlite3.Connection:

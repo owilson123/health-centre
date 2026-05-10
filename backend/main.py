@@ -1,5 +1,6 @@
 """Health Centre FastAPI backend."""
 import logging
+import os
 from datetime import date, datetime, timedelta
 from typing import Optional
 
@@ -16,9 +17,11 @@ logger = logging.getLogger(__name__)
 
 app = FastAPI(title="Health Centre API", version="1.0.0")
 
+ALLOWED_ORIGINS = os.environ.get("ALLOWED_ORIGINS", "*").split(",")
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=ALLOWED_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

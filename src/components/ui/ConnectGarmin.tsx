@@ -2,8 +2,10 @@
 
 import { useState } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { Eye, EyeOff, Wifi, Lock, AlertCircle, CheckCircle, Loader2 } from 'lucide-react'
+import { Eye, EyeOff, Wifi, Lock, AlertCircle, CheckCircle, Loader2, Server } from 'lucide-react'
 import { api } from '@/lib/api'
+
+const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:8000'
 
 interface Props {
   onConnected: () => void
@@ -26,7 +28,14 @@ export function ConnectGarmin({ onConnected }: Props) {
       setStatus('success')
       setTimeout(onConnected, 1200)
     } catch (err) {
-      setErrorMsg(err instanceof Error ? err.message : 'Connection failed. Check your credentials.')
+      const msg = err instanceof Error ? err.message : ''
+      if (msg.toLowerCase().includes('load') || msg.toLowerCase().includes('fetch') || msg === 'Failed to fetch' || msg === '') {
+        setErrorMsg('Could not reach the Health Centre backend. Make sure it is running on your machine (uvicorn main:app --port 8000) and that NEXT_PUBLIC_BACKEND_URL points to it.')
+      } else if (msg.toLowerCase().includes('401') || msg.toLowerCase().includes('unauthori') || msg.toLowerCase().includes('login')) {
+        setErrorMsg('Incorrect email or password. Double-check your Garmin Connect credentials.')
+      } else {
+        setErrorMsg(msg || 'Connection failed. Check your credentials and try again.')
+      }
       setStatus('error')
     }
   }
@@ -160,12 +169,23 @@ export function ConnectGarmin({ onConnected }: Props) {
           </AnimatePresence>
         </div>
 
+        {/* Backend URL indicator */}
+        <motion.div
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          transition={{ delay: 0.25 }}
+          className="flex items-center gap-2 mt-4 px-1"
+        >
+          <Server size={11} className="text-white/20 shrink-0" />
+          <p className="text-xs text-white/20 font-mono truncate">Backend: {BACKEND_URL}</p>
+        </motion.div>
+
         {/* Privacy note */}
         <motion.div
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
           transition={{ delay: 0.3 }}
-          className="flex items-start gap-2 mt-5 px-1"
+          className="flex items-start gap-2 mt-3 px-1"
         >
           <Lock size={12} className="text-white/20 mt-0.5 shrink-0" />
           <p className="text-xs text-white/20 leading-relaxed">
