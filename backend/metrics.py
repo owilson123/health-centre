@@ -386,9 +386,34 @@ def calc_strain_score(target_date: date = None, recovery_score: int = 50) -> dic
             if te > 0:
                 total_load += te * 60
 
-        # Normalise — calibrate so ~60 min Z3 = ~50 strain
-        # 60*60*4 = 14400 load units → 50 strain
         MAX_LOAD = 28800  # ~100 strain reference
+
+        # General movement load from steps (represents non-structured activity)
+        steps_row = conn.execute(
+            "SELECT steps, active_calories FROM steps WHERE date=?", (target_date.isoformat(),)
+        ).fetchone()
+        steps = (steps_row[0] if steps_row else None) or 0
+        active_cal = (steps_row[1] if steps_row else None) or 0
+
+        # Steps above 5k baseline contribute light load (10k steps ≈ +5 strain)
+        STEP_BASELINE = 5000
+        step_load = max(0, steps - STEP_BASELINE) / 1000 * 0.5 / 100 * MAX_LOAD
+        total_load += step_load
+
+        # Active calories as secondary signal (cap contribution at +10 strain)
+        # 500 active kcal ≈ +10 strain
+        cal_load = _clamp(active_cal / 500, 0, 1) * 0.10 * MAX_LOAD
+        total_load += cal_load
+
+        # Stress load — chronic stress is physiological strain even without exercise
+        stress_row = conn.execute(
+            "SELECT avg_stress FROM stress WHERE date=?", (target_date.isoformat(),)
+        ).fetchone()
+        avg_stress = (stress_row[0] if stress_row else None) or 0
+        # Stress > 25 (baseline) adds load, stress 75+ ≈ +8 strain
+        stress_load = _clamp(max(0, avg_stress - 25) / 50, 0, 1) * 0.08 * MAX_LOAD
+        total_load += stress_load
+
         strain = _clamp((total_load / MAX_LOAD) * 100)
 
         # Update DB with strain values per activity

@@ -81,6 +81,7 @@ def sync_all(days: int = 90):
     _sync_stress(client, start, end)
     _sync_steps(client, start, end)
     _sync_activities(client, start, end)
+    _backfill_strain(start, end)
 
     with db() as conn:
         conn.execute(
@@ -88,6 +89,18 @@ def sync_all(days: int = 90):
             ("ok", f"Synced {days} days ending {end}")
         )
     logger.info("Full sync complete")
+
+
+def _backfill_strain(start: date, end: date):
+    from metrics import calc_strain_score
+    d = start
+    while d <= end:
+        try:
+            calc_strain_score(d)
+        except Exception as e:
+            logger.debug(f"Strain backfill {d}: {e}")
+        d += timedelta(days=1)
+    logger.info(f"Strain backfilled {start} → {end}")
 
 
 def _sync_user_profile(client: Garmin):
