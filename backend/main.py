@@ -58,7 +58,8 @@ def connect_garmin(creds: GarminCredentials, background_tasks: BackgroundTasks):
     try:
         test_credentials(creds.email, creds.password)
     except Exception as e:
-        raise HTTPException(status_code=401, detail=f"Garmin login failed: {str(e)}")
+        logger.error(f"Garmin login failed for {creds.email}: {type(e).__name__}: {str(e)}")
+        raise HTTPException(status_code=401, detail=f"Garmin login failed: {type(e).__name__}: {str(e)}")
 
     with db() as conn:
         conn.execute("""
