@@ -44,7 +44,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
       </head>
       <body className={`${inter.variable} font-sans bg-[#0a0a0a] text-white antialiased`}>
         <AuthGate>
-          <main className="min-h-screen pb-[calc(4rem+env(safe-area-inset-bottom))]">
+          <main className="min-h-screen pb-[calc(54px+env(safe-area-inset-bottom))]">
             {children}
           </main>
           <BottomNav />
