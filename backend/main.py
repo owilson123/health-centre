@@ -1,18 +1,16 @@
 """Health Centre FastAPI backend."""
-import hashlib
 import logging
 import os
 import secrets
-from datetime import date, datetime, timedelta
+from datetime import date, datetime
 from typing import Optional
 
-import jwt
 from fastapi import FastAPI, HTTPException, BackgroundTasks, Depends, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from pydantic import BaseModel
 
 from database import init_db, db, _current_user
+from auth import get_current_user, make_token, USERS, _hash
 from garmin_sync import sync_all, test_credentials, get_stored_credentials, reset_client
 from metrics import calc_sleep_score, calc_recovery_score, calc_strain_score, calc_calories
 from training import router as training_router, init_training_db
@@ -31,52 +29,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-# ─── app-level auth ──────────────────────────────────────────────────────────
-
-SECRET_KEY = os.environ.get("APP_SECRET_KEY", "hc-dev-secret-change-in-prod-please")
-ALGORITHM  = "HS256"
-TOKEN_TTL_DAYS = 60
-
-# Users: {user_id: {password_hash, display}}
-def _hash(pw: str) -> str:
-    return hashlib.sha256(pw.encode()).hexdigest()
-
-USERS: dict[str, dict] = {
-    "ow": {"hash": _hash("ow123"), "display": "OW"},
-    "ob": {"hash": _hash("ob123"), "display": "OB"},
-}
-
-_bearer = HTTPBearer(auto_error=False)
-
-
-def _make_token(user_id: str) -> str:
-    exp = datetime.utcnow() + timedelta(days=TOKEN_TTL_DAYS)
-    return jwt.encode({"sub": user_id, "exp": exp}, SECRET_KEY, algorithm=ALGORITHM)
-
-
-def _decode_token(token: str) -> str:
-    """Return user_id or raise 401."""
-    try:
-        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
-        return payload["sub"]
-    except jwt.ExpiredSignatureError:
-        raise HTTPException(status_code=401, detail="Session expired — please log in again")
-    except Exception:
-        raise HTTPException(status_code=401, detail="Invalid token")
-
-
-def get_current_user(
-    credentials: Optional[HTTPAuthorizationCredentials] = Depends(_bearer),
-) -> str:
-    if not credentials:
-        raise HTTPException(status_code=401, detail="Not authenticated")
-    user_id = _decode_token(credentials.credentials)
-    if user_id not in USERS:
-        raise HTTPException(status_code=401, detail="Unknown user")
-    _current_user.set(user_id)
-    return user_id
-
 
 # ─── startup ─────────────────────────────────────────────────────────────────
 
@@ -100,7 +52,7 @@ def login(req: LoginRequest):
     user = USERS.get(req.user_id)
     if not user or not secrets.compare_digest(user["hash"], _hash(req.password)):
         raise HTTPException(status_code=401, detail="Invalid username or password")
-    token = _make_token(req.user_id)
+    token = make_token(req.user_id)
     return {"token": token, "user_id": req.user_id, "display": user["display"]}
 
 
