@@ -37,15 +37,27 @@ export function useDashboard() {
   return { data, loading, syncing, error, refresh }
 }
 
-export function useActivities() {
+export function useActivities(days = 30) {
   const [data, setData] = useState<Activity[] | null>(null)
   const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
 
-  useEffect(() => {
-    api.getActivities().then(setData).finally(() => setLoading(false))
-  }, [])
+  const load = useCallback(async () => {
+    setLoading(true)
+    setError(null)
+    try {
+      const result = await api.getActivities(days)
+      setData(result)
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Failed to load activities')
+    } finally {
+      setLoading(false)
+    }
+  }, [days])
 
-  return { data, loading }
+  useEffect(() => { load() }, [load])
+
+  return { data, loading, error, refresh: load }
 }
 
 export function useTrends() {

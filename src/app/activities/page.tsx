@@ -2,7 +2,7 @@
 
 import { useState } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { Activity, ChevronDown, ChevronUp, Heart, Flame, Timer } from 'lucide-react'
+import { Activity, ChevronDown, ChevronUp, Heart, Flame, Timer, RefreshCw, AlertCircle } from 'lucide-react'
 import { GlassCard } from '@/components/ui/GlassCard'
 import { SkeletonCard } from '@/components/ui/SkeletonCard'
 import { EmptyState } from '@/components/ui/EmptyState'
@@ -87,16 +87,25 @@ function ActivityCard({ activity }: { activity: import('@/lib/types').Activity }
 }
 
 export default function ActivitiesPage() {
-  const { data, loading } = useActivities()
+  const { data, loading, error, refresh } = useActivities(30)
   const container = { hidden: { opacity: 0 }, show: { opacity: 1, transition: { staggerChildren: 0.06 } } }
   const item = { hidden: { opacity: 0, y: 12 }, show: { opacity: 1, y: 0, transition: { duration: 0.35 } } }
 
   return (
     <div className="min-h-screen px-4 pt-[env(safe-area-inset-top)]">
       <div className="py-5">
-        <div className="flex items-center gap-2 mb-1">
-          <Activity size={16} className="text-green-400" />
-          <p className="text-sm text-white/40">Last 14 days</p>
+        <div className="flex items-center justify-between mb-1">
+          <div className="flex items-center gap-2">
+            <Activity size={16} className="text-green-400" />
+            <p className="text-sm text-white/40">Last 30 days</p>
+          </div>
+          <button
+            onClick={refresh}
+            disabled={loading}
+            className="p-2 text-white/30 active:text-white disabled:opacity-30"
+          >
+            <RefreshCw size={15} className={loading ? 'animate-spin' : ''} />
+          </button>
         </div>
         <h1 className="text-2xl font-bold">Activities</h1>
       </div>
@@ -105,8 +114,27 @@ export default function ActivitiesPage() {
         <div className="space-y-3">
           {Array.from({ length: 5 }).map((_, i) => <SkeletonCard key={i} />)}
         </div>
+      ) : error ? (
+        <div className="flex flex-col items-center justify-center py-16 gap-3 text-center px-4">
+          <AlertCircle size={28} className="text-red-400 opacity-60" />
+          <p className="text-sm text-white/50">{error}</p>
+          <button
+            onClick={refresh}
+            className="mt-1 px-5 py-2.5 bg-white/8 rounded-xl text-sm text-white/70 active:bg-white/12"
+          >
+            Try again
+          </button>
+        </div>
       ) : !data?.length ? (
-        <EmptyState title="No activities" description="Your recent Garmin activities will appear here." />
+        <div className="flex flex-col items-center justify-center py-16 gap-3 text-center px-4">
+          <EmptyState title="No activities" description="No Garmin activities found in the last 30 days." />
+          <button
+            onClick={refresh}
+            className="mt-1 px-5 py-2.5 bg-white/8 rounded-xl text-sm text-white/70 active:bg-white/12"
+          >
+            Refresh
+          </button>
+        </div>
       ) : (
         <motion.div variants={container} initial="hidden" animate="show" className="space-y-3 pb-6">
           {data.map(a => (
