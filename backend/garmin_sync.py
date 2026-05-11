@@ -1,5 +1,4 @@
 """Garmin Connect data fetcher — pulls and caches 90 days of health data."""
-import os
 import logging
 from datetime import date, timedelta, datetime
 from pathlib import Path
@@ -25,15 +24,13 @@ def _get_user() -> str:
 
 
 def get_stored_credentials() -> Optional[tuple[str, str]]:
-    """Return (email, password) from current user's DB, or fall back to env vars."""
+    """Return (email, password) from the current user's own DB only.
+    No env-var fallback — credentials are strictly per-user and must be
+    connected explicitly through the UI to prevent data leaking between accounts."""
     with db() as conn:
         row = conn.execute("SELECT garmin_email, garmin_password FROM credentials WHERE id=1").fetchone()
         if row:
             return row[0], row[1]
-    email = os.environ.get("GARMIN_EMAIL")
-    password = os.environ.get("GARMIN_PASSWORD")
-    if email and password:
-        return email, password
     return None
 
 
