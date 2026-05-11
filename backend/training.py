@@ -69,6 +69,10 @@ def init_training_db(user_id: str | None = None):
             conn.execute("ALTER TABLE workout_sessions ADD COLUMN strength_strain REAL DEFAULT 0")
         except Exception:
             pass  # column already exists
+        try:
+            conn.execute("ALTER TABLE exercises ADD COLUMN is_custom INTEGER NOT NULL DEFAULT 0")
+        except Exception:
+            pass  # column already exists
 
 
 EXERCISES = [
@@ -840,6 +844,17 @@ def log_set(sid: int, body: SetLog, _uid: str = Depends(get_current_user)):
 def delete_set(set_id: int, _uid: str = Depends(get_current_user)):
     with db() as conn:
         conn.execute("DELETE FROM workout_sets WHERE id=?", (set_id,))
+    return {"status": "deleted"}
+
+
+@router.delete("/sessions/{sid}")
+def delete_session(sid: int, _uid: str = Depends(get_current_user)):
+    with db() as conn:
+        row = conn.execute("SELECT id FROM workout_sessions WHERE id=?", (sid,)).fetchone()
+        if not row:
+            raise HTTPException(404, "Session not found")
+        conn.execute("DELETE FROM workout_sets WHERE session_id=?", (sid,))
+        conn.execute("DELETE FROM workout_sessions WHERE id=?", (sid,))
     return {"status": "deleted"}
 
 

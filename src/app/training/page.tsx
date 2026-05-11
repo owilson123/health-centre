@@ -159,17 +159,29 @@ function ExercisePicker({
   multi?: boolean
   selected?: number[]
 }) {
-  const [exercises, setExercises] = useState<TrainingExercise[]>([])
+  const [allExs, setAllExs] = useState<TrainingExercise[]>([])
   const [q, setQ] = useState('')
   const [cat, setCat] = useState('')
   const [picked, setPicked] = useState<Set<number>>(new Set(selected))
   const [creating, setCreating] = useState(false)
 
   const load = useCallback(() => {
-    api.training.getExercises(q, cat).then(setExercises)
-  }, [q, cat])
+    // Load everything once; filter client-side for instant predictive search
+    api.training.getExercises('', '').then(setAllExs)
+  }, [])
 
   useEffect(() => { load() }, [load])
+
+  // Client-side filter: match any word that starts with query, or query anywhere in name
+  const exercises = allExs.filter(ex => {
+    const matchesCat = !cat || ex.category === cat
+    if (!matchesCat) return false
+    if (!q) return true
+    const ql = q.toLowerCase()
+    const name = ex.name.toLowerCase()
+    // "ben" matches "bench", "bar" matches "barbell", etc.
+    return name.includes(ql) || name.split(/\s+/).some(w => w.startsWith(ql))
+  })
 
   const toggle = (ex: TrainingExercise) => {
     if (!multi) { onSelect([ex]); return }
@@ -186,7 +198,7 @@ function ExercisePicker({
 
   const handleCreated = (ex: TrainingExercise) => {
     setCreating(false)
-    load()
+    setAllExs(prev => [...prev, ex])
     if (!multi) {
       onSelect([ex])
     } else {
@@ -198,7 +210,7 @@ function ExercisePicker({
     e.stopPropagation()
     try {
       await api.training.deleteExercise(ex.id)
-      setExercises(prev => prev.filter(x => x.id !== ex.id))
+      setAllExs(prev => prev.filter(x => x.id !== ex.id))
       setPicked(prev => { const n = new Set(prev); n.delete(ex.id); return n })
     } catch {}
   }
@@ -784,12 +796,25 @@ function ActiveSession({
 
 // ─── History Session Detail ───────────────────────────────────────────────────
 
-function SessionDetailSheet({ sid, onClose }: { sid: number; onClose: () => void }) {
+function SessionDetailSheet({ sid, onClose, onDeleted }: { sid: number; onClose: () => void; onDeleted: () => void }) {
   const [detail, setDetail] = useState<SessionDetail | null>(null)
+  const [confirmDelete, setConfirmDelete] = useState(false)
+  const [deleting, setDeleting] = useState(false)
 
   useEffect(() => {
     api.training.getSession(sid).then(setDetail)
   }, [sid])
+
+  const handleDelete = async () => {
+    if (!confirmDelete) { setConfirmDelete(true); return }
+    setDeleting(true)
+    try {
+      await api.training.deleteSession(sid)
+      onDeleted()
+    } finally {
+      setDeleting(false)
+    }
+  }
 
   if (!detail) return (
     <motion.div
@@ -863,6 +888,24 @@ function SessionDetailSheet({ sid, onClose }: { sid: number; onClose: () => void
             </div>
           </div>
         ))}
+
+        {/* Delete workout */}
+        <div className="pt-4">
+          <button
+            onClick={handleDelete}
+            disabled={deleting}
+            className={`w-full py-3 rounded-2xl text-sm font-semibold transition-colors ${
+              confirmDelete
+                ? 'bg-red-500 text-white'
+                : 'bg-white/5 text-red-400 border border-red-500/20'
+            } disabled:opacity-50`}
+          >
+            {deleting ? 'Deleting…' : confirmDelete ? 'Tap again to confirm delete' : 'Delete Workout'}
+          </button>
+          {confirmDelete && (
+            <p className="text-center text-xs text-white/30 mt-1.5">This cannot be undone</p>
+          )}
+        </div>
       </div>
     </motion.div>
   )
@@ -1230,7 +1273,11 @@ export default function TrainingPage() {
       {/* History detail */}
       <AnimatePresence>
         {detailSid !== null && (
-          <SessionDetailSheet sid={detailSid} onClose={() => setDetailSid(null)} />
+          <SessionDetailSheet
+            sid={detailSid}
+            onClose={() => setDetailSid(null)}
+            onDeleted={() => { setDetailSid(null); loadData() }}
+          />
         )}
       </AnimatePresence>
     </div>

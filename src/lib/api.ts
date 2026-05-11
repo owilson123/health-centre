@@ -107,6 +107,7 @@ export const api = {
     logSet:        (sid: number, body: SetLog) =>
       post<{ set_id: number }>('/training/sessions/' + sid + '/sets', body),
     deleteSet:     (setId: number) => del('/training/sets/' + setId),
+    deleteSession: (sid: number) => del('/training/sessions/' + sid),
 
     lastPerformance: (exerciseId: number) =>
       get<LastPerformance>('/training/exercises/' + exerciseId + '/last-performance'),
