@@ -177,6 +177,223 @@ class SetLog(BaseModel):
     reps: int
 
 
+# ─── DUP recommendation engine ───────────────────────────────────────────────
+
+# Three DUP phases that cycle: Hypertrophy → Strength → Power → repeat
+DUP_PHASES = [
+    {"name": "Hypertrophy", "sets": 4, "reps_low": 8,  "reps_high": 12, "pct": 0.68},
+    {"name": "Strength",    "sets": 4, "reps_low": 5,  "reps_high": 6,  "pct": 0.825},
+    {"name": "Power",       "sets": 5, "reps_low": 3,  "reps_high": 5,  "pct": 0.875},
+]
+
+# Anchor lift names for each category
+ANCHOR: dict[str, str] = {
+    "Push": "Barbell Bench Press",
+    "Pull": "Barbell Row",
+    "Legs": "Squat",
+    "Arms": "Barbell Bench Press",   # proxy: bench → arms scales
+    "Core": "",
+}
+
+# Scale relative to anchor 1RM (total weight on bar / combined DB weight)
+# None = bodyweight exercise, no weight recommendation
+SCALE: dict[str, float | None] = {
+    # Push — anchor = Bench Press
+    "Barbell Bench Press":          1.00,
+    "Incline Barbell Bench Press":  0.85,
+    "Close-Grip Bench Press":       0.80,
+    "Overhead Press":               0.64,
+    "Push Press":                   0.75,
+    "Dumbbell Bench Press":         0.82,   # both DBs combined
+    "Incline Dumbbell Press":       0.76,
+    "Dumbbell Shoulder Press":      0.55,
+    "Dumbbell Fly":                 0.45,
+    "Dumbbell Lateral Raise":       0.20,
+    "Dumbbell Front Raise":         0.22,
+    "Cable Fly":                    0.40,
+    "Cable Lateral Raise":          0.15,
+    "Chest Press Machine":          0.90,
+    "Pec Deck":                     0.55,
+    "Push-Up":                      None,
+    "Dip":                          None,
+    "Pike Push-Up":                 None,
+    # Pull — anchor = Barbell Row
+    "Barbell Row":                  1.00,
+    "T-Bar Row":                    0.90,
+    "Barbell Shrug":                1.30,
+    "Deadlift":                     1.55,
+    "Romanian Deadlift":            1.10,
+    "Dumbbell Row":                 0.55,
+    "Dumbbell Shrug":               0.65,
+    "Dumbbell RDL":                 0.60,
+    "Lat Pulldown":                 0.75,
+    "Seated Cable Row":             0.75,
+    "Face Pull":                    0.30,
+    "Cable Curl":                   0.25,
+    "Pull-Up":                      None,
+    "Chin-Up":                      None,
+    "Inverted Row":                 None,
+    "Machine Row":                  0.80,
+    # Legs — anchor = Squat
+    "Squat":                        1.00,
+    "Front Squat":                  0.80,
+    "Hip Thrust":                   1.15,
+    "Good Morning":                 0.45,
+    "Dumbbell Lunge":               0.35,
+    "Bulgarian Split Squat":        0.32,
+    "Dumbbell Step-Up":             0.30,
+    "Leg Press":                    1.80,
+    "Leg Curl":                     0.30,
+    "Leg Extension":                0.35,
+    "Seated Calf Raise":            0.30,
+    "Standing Calf Raise":          0.50,
+    "Smith Machine Squat":          0.95,
+    "Bodyweight Squat":             None,
+    "Nordic Curl":                  None,
+    "Glute Bridge":                 None,
+    "Box Jump":                     None,
+    # Arms — proxy anchor = Bench Press
+    "Barbell Curl":                 0.28,
+    "EZ-Bar Curl":                  0.27,
+    "Skull Crusher":                0.30,
+    "Dumbbell Curl":                0.18,
+    "Hammer Curl":                  0.20,
+    "Incline Dumbbell Curl":        0.17,
+    "Overhead Tricep Extension":    0.22,
+    "Tricep Pushdown":              0.25,
+    "Overhead Cable Curl":          0.20,
+    "Preacher Curl Machine":        0.30,
+}
+
+# Dumbbell exercises where weight shown should be per-dumbbell (scale/2)
+DUMBBELL_PER_HAND = {
+    "Dumbbell Bench Press", "Incline Dumbbell Press", "Dumbbell Shoulder Press",
+    "Dumbbell Fly", "Dumbbell Lateral Raise", "Dumbbell Front Raise",
+    "Dumbbell Row", "Dumbbell Shrug", "Dumbbell RDL",
+    "Dumbbell Lunge", "Bulgarian Split Squat", "Dumbbell Step-Up",
+    "Dumbbell Curl", "Hammer Curl", "Incline Dumbbell Curl",
+    "Overhead Tricep Extension",
+}
+
+
+def _epley_1rm(weight: float, reps: int) -> float:
+    """Epley formula: weight × (1 + reps/30)."""
+    if reps == 1:
+        return weight
+    return weight * (1 + reps / 30)
+
+
+def _round_weight(kg: float) -> float:
+    """Round to nearest 2.5 kg plate increment."""
+    return round(kg / 2.5) * 2.5
+
+
+def _best_1rm(conn, exercise_name: str) -> float | None:
+    """Return best estimated 1RM (kg) for a named exercise, or None."""
+    row = conn.execute(
+        "SELECT id FROM exercises WHERE name = ?", (exercise_name,)
+    ).fetchone()
+    if not row:
+        return None
+    sets = conn.execute(
+        """SELECT weight_kg, reps FROM workout_sets
+           WHERE exercise_id = ? AND weight_kg IS NOT NULL AND weight_kg > 0 AND reps > 0""",
+        (row["id"],)
+    ).fetchall()
+    if not sets:
+        return None
+    best = max(_epley_1rm(s["weight_kg"], s["reps"]) for s in sets)
+    return round(best, 1)
+
+
+def _dup_phase(conn, category: str) -> dict:
+    """
+    Determine which DUP phase to prescribe next.
+    Count completed sessions that contained exercises of this category,
+    advance through Hypertrophy → Strength → Power cyclically.
+    """
+    row = conn.execute("""
+        SELECT COUNT(DISTINCT ws.session_id) as n
+        FROM workout_sets ws
+        JOIN exercises e ON e.id = ws.exercise_id
+        JOIN workout_sessions sess ON sess.id = ws.session_id
+        WHERE e.category = ? AND sess.finished_at IS NOT NULL
+    """, (category,)).fetchone()
+    n = row["n"] if row else 0
+    return DUP_PHASES[n % len(DUP_PHASES)]
+
+
+def _dup_recommendation(conn, exercise_name: str, category: str) -> dict | None:
+    """
+    Build a full DUP recommendation for an exercise.
+    Returns None if no anchor data yet.
+    """
+    scale = SCALE.get(exercise_name)
+    if scale is None:
+        # Bodyweight exercise — give reps-only recommendation
+        phase = _dup_phase(conn, category)
+        return {
+            "phase": phase["name"],
+            "sets": phase["sets"],
+            "reps_low": phase["reps_low"],
+            "reps_high": phase["reps_high"],
+            "weight_kg": None,
+            "per_hand": False,
+            "anchor_name": None,
+            "anchor_1rm": None,
+            "note": "Bodyweight — focus on quality reps",
+        }
+
+    anchor_name = ANCHOR.get(category, "")
+    if not anchor_name:
+        return None   # Core — no recommendation
+
+    anchor_1rm = _best_1rm(conn, anchor_name)
+
+    # Fallback: if the exercise IS the anchor (e.g. user logs bench, no prior bench),
+    # try to get 1RM from the exercise itself
+    if anchor_1rm is None and exercise_name != anchor_name:
+        anchor_1rm = _best_1rm(conn, exercise_name)
+        if anchor_1rm is not None:
+            # Reverse-scale to get implied anchor 1RM
+            anchor_1rm = anchor_1rm / scale
+    if anchor_1rm is None:
+        # Check if THIS exercise is the anchor and has direct data
+        anchor_1rm = _best_1rm(conn, exercise_name)
+        if anchor_1rm is not None:
+            anchor_name = exercise_name
+        else:
+            return None  # No data yet — can't recommend
+
+    phase = _dup_phase(conn, category)
+
+    # Target working weight at prescribed % of 1RM
+    target_total = anchor_1rm * scale * phase["pct"]
+
+    per_hand = exercise_name in DUMBBELL_PER_HAND
+    display_weight = _round_weight(target_total / 2 if per_hand else target_total)
+
+    # Don't suggest a nonsensical weight
+    if display_weight <= 0:
+        return None
+
+    return {
+        "phase":       phase["name"],
+        "sets":        phase["sets"],
+        "reps_low":    phase["reps_low"],
+        "reps_high":   phase["reps_high"],
+        "weight_kg":   display_weight,
+        "per_hand":    per_hand,
+        "anchor_name": anchor_name,
+        "anchor_1rm":  round(anchor_1rm, 1),
+        "note": (
+            f"Based on {anchor_name} est. 1RM {round(anchor_1rm)}kg"
+            if anchor_name != exercise_name
+            else f"Based on your best estimated 1RM {round(anchor_1rm)}kg"
+        ),
+    }
+
+
 # ─── Helpers ─────────────────────────────────────────────────────────────────
 
 def _fmt_performance(sets: list) -> str | None:
@@ -389,6 +606,11 @@ def delete_set(set_id: int, _uid: str = Depends(get_current_user)):
 @router.get("/exercises/{exercise_id}/last-performance")
 def last_performance(exercise_id: int, _uid: str = Depends(get_current_user)):
     with db() as conn:
+        # Exercise meta (needed for DUP recommendation)
+        ex_row = conn.execute(
+            "SELECT name, category FROM exercises WHERE id=?", (exercise_id,)
+        ).fetchone()
+
         # Find most recent finished session containing this exercise
         row = conn.execute("""
             SELECT ws.session_id
@@ -397,22 +619,31 @@ def last_performance(exercise_id: int, _uid: str = Depends(get_current_user)):
             WHERE ws.exercise_id = ? AND sess.finished_at IS NOT NULL
             ORDER BY sess.started_at DESC LIMIT 1
         """, (exercise_id,)).fetchone()
-        if not row:
-            return {"summary": None, "sets": []}
-        sid = row["session_id"]
-        sets = conn.execute("""
-            SELECT set_number, weight_kg, reps
-            FROM workout_sets WHERE session_id=? AND exercise_id=?
-            ORDER BY set_number
-        """, (sid, exercise_id)).fetchall()
-        session = conn.execute(
-            "SELECT started_at FROM workout_sessions WHERE id=?", (sid,)
-        ).fetchone()
 
-    set_list = [dict(s) for s in sets]
-    summary  = _fmt_performance([{**s, "exercise_id": exercise_id} for s in set_list])
+        set_list = []
+        session_date = None
+        if row:
+            sid = row["session_id"]
+            sets = conn.execute("""
+                SELECT set_number, weight_kg, reps
+                FROM workout_sets WHERE session_id=? AND exercise_id=?
+                ORDER BY set_number
+            """, (sid, exercise_id)).fetchall()
+            session = conn.execute(
+                "SELECT started_at FROM workout_sessions WHERE id=?", (sid,)
+            ).fetchone()
+            set_list = [dict(s) for s in sets]
+            session_date = session["started_at"][:10] if session else None
+
+        # DUP recommendation
+        recommendation = None
+        if ex_row:
+            recommendation = _dup_recommendation(conn, ex_row["name"], ex_row["category"])
+
+    summary = _fmt_performance([{**s, "exercise_id": exercise_id} for s in set_list]) if set_list else None
     return {
         "summary": summary,
         "sets": set_list,
-        "session_date": session["started_at"][:10] if session else None,
+        "session_date": session_date,
+        "recommendation": recommendation,
     }

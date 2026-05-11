@@ -251,6 +251,38 @@ function TemplateBuilder({ onClose, existing }: { onClose: () => void; existing?
   )
 }
 
+// ─── DUP phase badge ─────────────────────────────────────────────────────────
+
+const PHASE_STYLE: Record<string, { bg: string; text: string; dot: string }> = {
+  Hypertrophy: { bg: 'bg-blue-500/15',   text: 'text-blue-300',   dot: 'bg-blue-400' },
+  Strength:    { bg: 'bg-violet-500/15', text: 'text-violet-300', dot: 'bg-violet-400' },
+  Power:       { bg: 'bg-amber-500/15',  text: 'text-amber-300',  dot: 'bg-amber-400' },
+}
+
+function DupBadge({ rec }: { rec: import('@/lib/api').DupRecommendation }) {
+  const style = PHASE_STYLE[rec.phase] ?? PHASE_STYLE.Hypertrophy
+  const weightStr = rec.weight_kg
+    ? `${rec.weight_kg} kg${rec.per_hand ? ' / hand' : ''}`
+    : 'Bodyweight'
+  return (
+    <div className={`rounded-xl p-3 ${style.bg} border border-white/5`}>
+      <div className="flex items-center gap-2 mb-1.5">
+        <span className={`w-1.5 h-1.5 rounded-full ${style.dot}`} />
+        <span className={`text-[11px] font-semibold uppercase tracking-wider ${style.text}`}>
+          {rec.phase} Day
+        </span>
+      </div>
+      <div className="flex items-baseline gap-3">
+        <span className="text-white font-bold text-base">
+          {rec.sets} × {rec.reps_low}{rec.reps_low !== rec.reps_high ? `–${rec.reps_high}` : ''}
+        </span>
+        <span className={`text-sm font-semibold ${style.text}`}>{weightStr}</span>
+      </div>
+      <p className="text-[10px] text-white/30 mt-1">{rec.note}</p>
+    </div>
+  )
+}
+
 // ─── Active Session ───────────────────────────────────────────────────────────
 
 interface ActiveSet {
@@ -271,17 +303,20 @@ function ActiveSession({
   const [sets, setSets] = useState<Record<number, ActiveSet[]>>({})
   const [perf, setPerf] = useState<Record<number, LastPerformance>>({})
   const [openEx, setOpenEx] = useState<number | null>(session.exercises[0]?.id ?? null)
-  const [showAddEx, setShowAddEx] = useState(false)
+  // Open picker immediately if session started with no exercises (empty workout)
+  const [showAddEx, setShowAddEx] = useState(session.exercises.length === 0)
   const [allExercises, setAllExercises] = useState<TrainingExercise[]>(session.exercises)
   const [finishing, setFinishing] = useState(false)
 
-  // Load last performance for each exercise
+  // Load last performance + DUP recommendation for each exercise
   useEffect(() => {
     allExercises.forEach(ex => {
+      if (perf[ex.id]) return   // already loaded
       api.training.lastPerformance(ex.id).then(p => {
         setPerf(prev => ({ ...prev, [ex.id]: p }))
       }).catch(() => {})
     })
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [allExercises])
 
   const getExSets = (exId: number): ActiveSet[] => sets[exId] ?? []
@@ -290,12 +325,14 @@ function ActiveSession({
     setSets(prev => {
       const cur = prev[exId] ?? []
       const last = cur[cur.length - 1]
+      // Pre-fill with DUP recommendation if no previous sets yet
+      const rec = perf[exId]?.recommendation
       return {
         ...prev,
         [exId]: [...cur, {
           set_number: cur.length + 1,
-          weight_kg: last?.weight_kg ?? '',
-          reps: last?.reps ?? '',
+          weight_kg: last?.weight_kg ?? (rec?.weight_kg ? String(rec.weight_kg) : ''),
+          reps: last?.reps ?? (rec ? String(rec.reps_high) : ''),
           saved: false,
         }],
       }
@@ -376,10 +413,25 @@ function ActiveSession({
 
         {/* Exercise list */}
         <div className="flex-1 overflow-y-auto pb-32">
+          {allExercises.length === 0 && (
+            <div className="flex flex-col items-center justify-center py-20 text-white/30">
+              <Dumbbell size={32} className="mb-3 opacity-30" />
+              <p className="text-sm">No exercises yet</p>
+              <button
+                onClick={() => setShowAddEx(true)}
+                className="mt-4 px-5 py-2.5 bg-indigo-500 rounded-xl text-sm font-semibold text-white"
+              >
+                Add Exercise
+              </button>
+            </div>
+          )}
+
           {allExercises.map(ex => {
             const exSets = getExSets(ex.id)
             const lastP = perf[ex.id]
+            const rec = lastP?.recommendation ?? null
             const isOpen = openEx === ex.id
+            const savedCount = exSets.filter(s => s.saved).length
 
             return (
               <div key={ex.id} className="border-b border-white/5">
@@ -389,25 +441,32 @@ function ActiveSession({
                 >
                   <div className="flex-1 text-left">
                     <p className="text-sm font-semibold text-white">{ex.name}</p>
-                    {lastP?.summary && (
+                    {lastP?.summary ? (
                       <p className="text-xs text-white/35 mt-0.5">Last: {lastP.summary}</p>
-                    )}
+                    ) : rec ? (
+                      <p className={`text-xs mt-0.5 ${PHASE_STYLE[rec.phase]?.text ?? 'text-white/40'}`}>
+                        {rec.phase} · {rec.sets}×{rec.reps_low}{rec.reps_low !== rec.reps_high ? `–${rec.reps_high}` : ''}
+                        {rec.weight_kg ? ` @ ${rec.weight_kg}kg` : ''}
+                      </p>
+                    ) : null}
                   </div>
-                  {exSets.filter(s => s.saved).length > 0 && (
-                    <span className="text-xs text-green-400 font-medium">
-                      {exSets.filter(s => s.saved).length} sets
-                    </span>
+                  {savedCount > 0 && (
+                    <span className="text-xs text-green-400 font-medium">{savedCount} sets</span>
                   )}
                   <ChevronDown size={15} className={`text-white/30 transition-transform ${isOpen ? 'rotate-180' : ''}`} />
                 </button>
 
                 {isOpen && (
-                  <div className="px-4 pb-4">
-                    {/* Last performance hint */}
+                  <div className="px-4 pb-4 space-y-3">
+
+                    {/* DUP recommendation card */}
+                    {rec && <DupBadge rec={rec} />}
+
+                    {/* Last performance */}
                     {lastP?.sets && lastP.sets.length > 0 && (
-                      <div className="mb-3 p-2.5 bg-white/4 rounded-xl">
+                      <div className="p-2.5 bg-white/4 rounded-xl">
                         <p className="text-[10px] text-white/30 uppercase tracking-widest mb-1.5">
-                          Last · {lastP.session_date}
+                          Last session · {lastP.session_date}
                         </p>
                         <div className="flex flex-wrap gap-1.5">
                           {lastP.sets.map((s, i) => (
@@ -421,11 +480,12 @@ function ActiveSession({
 
                     {/* Sets */}
                     {exSets.length > 0 && (
-                      <div className="mb-2 space-y-2">
-                        {/* Header row */}
+                      <div className="space-y-2">
                         <div className="flex gap-2 px-1">
                           <span className="w-6 text-[10px] text-white/20 text-center">SET</span>
-                          <span className="flex-1 text-[10px] text-white/20 text-center">KG</span>
+                          <span className="flex-1 text-[10px] text-white/20 text-center">
+                            {ex.equipment === 'Dumbbell' ? 'KG / HAND' : 'KG'}
+                          </span>
                           <span className="flex-1 text-[10px] text-white/20 text-center">REPS</span>
                           <span className="w-10" />
                         </div>
@@ -481,14 +541,16 @@ function ActiveSession({
             )
           })}
 
-          {/* Add exercise */}
-          <button
-            onClick={() => setShowAddEx(true)}
-            className="w-full flex items-center justify-center gap-2 px-4 py-4 text-white/30 text-sm active:bg-white/5"
-          >
-            <Plus size={15} />
-            Add exercise
-          </button>
+          {/* Add exercise button */}
+          {allExercises.length > 0 && (
+            <button
+              onClick={() => setShowAddEx(true)}
+              className="w-full flex items-center justify-center gap-2 px-4 py-4 text-white/30 text-sm active:bg-white/5"
+            >
+              <Plus size={15} />
+              Add exercise
+            </button>
+          )}
         </div>
       </motion.div>
 

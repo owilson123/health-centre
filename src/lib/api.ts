@@ -158,8 +158,21 @@ export interface SetLog {
   reps: number
 }
 
+export interface DupRecommendation {
+  phase: 'Hypertrophy' | 'Strength' | 'Power'
+  sets: number
+  reps_low: number
+  reps_high: number
+  weight_kg: number | null
+  per_hand: boolean
+  anchor_name: string | null
+  anchor_1rm: number | null
+  note: string
+}
+
 export interface LastPerformance {
   summary: string | null
   sets: { set_number: number; weight_kg: number | null; reps: number }[]
   session_date: string | null
+  recommendation: DupRecommendation | null
 }
