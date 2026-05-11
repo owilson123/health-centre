@@ -169,7 +169,12 @@ def _sync_sleep(client: Garmin, start: date, end: date):
             awake = daily.get("awakeSleepSeconds", 0) or 0
             # Use Garmin's own total sleep time as the authority, not our sum of stages
             total = daily.get("sleepTimeSeconds") or daily.get("totalSleepSeconds") or (deep + rem + light)
-            efficiency = daily.get("sleepScores", {}).get("sleepEfficiency") or daily.get("sleepEfficiency") or 0
+            # Garmin efficiency: try their value first, then calculate from stages
+            efficiency = daily.get("sleepScores", {}).get("sleepEfficiency") or daily.get("sleepEfficiency")
+            if not efficiency and total and (deep + rem + light + awake) > 0:
+                # Sleep efficiency = sleep time / (sleep time + awake time) * 100
+                efficiency = round((deep + rem + light) / (deep + rem + light + awake) * 100)
+            efficiency = efficiency or 0
             # HRV from the HRV summary block, not SpO2
             hrv_summary = raw.get("hrvSummary") or {}
             hrv = hrv_summary.get("lastNight") or hrv_summary.get("lastNight5MinHigh") or daily.get("averageHRV")

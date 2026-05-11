@@ -84,7 +84,10 @@ def calc_sleep_score(target_date: date = None) -> dict:
 
         # 2. Efficiency (15%)
         eff = sleep["efficiency"] or 0
-        eff_score = _clamp((eff / 95) * 100) if eff <= 95 else 100
+        if eff > 0:
+            eff_score = _clamp((eff / 95) * 100) if eff <= 95 else 100.0
+        else:
+            eff_score = 50.0  # no data — neutral, don't penalise
 
         # 3. Deep sleep % (20%)
         deep_pct = (sleep["deep_sleep_seconds"] or 0) / total * 100
