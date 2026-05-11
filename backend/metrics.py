@@ -397,36 +397,73 @@ def calc_strain_score(target_date: date = None, recovery_score: int = 50) -> dic
                 total_load += te * 60
 
         MAX_LOAD = 28800  # ~100 strain reference
+        STEP_BASELINE = 5000
 
-        # General movement load from steps (represents non-structured activity)
+        # ── Today's non-activity (background) load ──────────────────────
         steps_row = conn.execute(
             "SELECT steps, active_calories FROM steps WHERE date=?", (target_date.isoformat(),)
         ).fetchone()
         steps = (steps_row[0] if steps_row else None) or 0
         active_cal = (steps_row[1] if steps_row else None) or 0
 
-        # Steps above 5k baseline contribute light load (10k steps ≈ +5 strain)
-        STEP_BASELINE = 5000
         step_load = max(0, steps - STEP_BASELINE) / 1000 * 0.5 / 100 * MAX_LOAD
-        total_load += step_load
+        cal_load  = _clamp(active_cal / 500, 0, 1) * 0.10 * MAX_LOAD
 
-        # Active calories as secondary signal (cap contribution at +10 strain)
-        # 500 active kcal ≈ +10 strain
-        cal_load = _clamp(active_cal / 500, 0, 1) * 0.10 * MAX_LOAD
-        total_load += cal_load
-
-        # Stress load — chronic stress is physiological strain even without exercise
         stress_row = conn.execute(
             "SELECT avg_stress FROM stress WHERE date=?", (target_date.isoformat(),)
         ).fetchone()
         avg_stress = (stress_row[0] if stress_row else None) or 0
-        # Stress > 25 (baseline) adds load, stress 75+ ≈ +8 strain
         stress_load = _clamp(max(0, avg_stress - 25) / 50, 0, 1) * 0.08 * MAX_LOAD
-        total_load += stress_load
+
+        bg_load_today = step_load + cal_load + stress_load
+        total_load += bg_load_today
+
+        # ── 30-day rolling background baseline ─────────────────────────
+        # Compute the same formula on each of the last 30 days to establish
+        # what a "typical" background load looks like for this person.
+        hist_start = (target_date - timedelta(days=31)).isoformat()
+        hist_end   = (target_date - timedelta(days=1)).isoformat()
+
+        hist_steps = {r["date"]: r for r in conn.execute(
+            "SELECT date, steps, active_calories FROM steps WHERE date BETWEEN ? AND ?",
+            (hist_start, hist_end)
+        ).fetchall()}
+        hist_stress = {r["date"]: r for r in conn.execute(
+            "SELECT date, avg_stress FROM stress WHERE date BETWEEN ? AND ?",
+            (hist_start, hist_end)
+        ).fetchall()}
+
+        bg_history: list[float] = []
+        for i in range(1, 31):
+            d = (target_date - timedelta(days=i)).isoformat()
+            s_row = hist_steps.get(d)
+            st_row = hist_stress.get(d)
+            if not s_row:
+                continue
+            h_steps = s_row["steps"] or 0
+            h_cal   = s_row["active_calories"] or 0
+            h_stress = st_row["avg_stress"] if st_row else 25
+            h_step_load   = max(0, h_steps - STEP_BASELINE) / 1000 * 0.5 / 100 * MAX_LOAD
+            h_cal_load    = _clamp(h_cal / 500, 0, 1) * 0.10 * MAX_LOAD
+            h_stress_load = _clamp(max(0, (h_stress or 25) - 25) / 50, 0, 1) * 0.08 * MAX_LOAD
+            bg_history.append(h_step_load + h_cal_load + h_stress_load)
+
+        bg_baseline_load = _mean(bg_history) or bg_load_today
+        bg_baseline_strain = round(_clamp((bg_baseline_load / MAX_LOAD) * 100))
+        bg_today_strain    = round(_clamp((bg_load_today   / MAX_LOAD) * 100))
+
+        # Annotate how today compares to the baseline
+        bg_delta = bg_today_strain - bg_baseline_strain
+        if bg_delta > 3:
+            bg_context = f"higher than your usual {bg_baseline_strain} ({'+' if bg_delta>0 else ''}{bg_delta})"
+        elif bg_delta < -3:
+            bg_context = f"lower than your usual {bg_baseline_strain} ({bg_delta})"
+        else:
+            bg_context = f"about normal for you ({bg_baseline_strain} avg)"
 
         strain = _clamp((total_load / MAX_LOAD) * 100)
 
-        # Update DB with strain values per activity
+        # ── Per-activity strain write-back ──────────────────────────────
         for a in activities:
             act = dict(a)
             mult = TYPE_MULTIPLIERS.get(act["type"], 0.9)
@@ -437,11 +474,11 @@ def calc_strain_score(target_date: date = None, recovery_score: int = 50) -> dic
                     for z in range(1, 6)
                 )
             else:
-                avg_hr = act.get("avg_hr") or 0
-                duration = act.get("duration_seconds") or 0
-                if avg_hr > 0 and duration > 0:
-                    hr_reserve = _clamp((avg_hr - rhr) / max(max_hr - rhr, 1), 0, 1)
-                    trimp = (duration / 60) * hr_reserve * 0.64 * math.exp(1.92 * hr_reserve)
+                a_avg_hr = act.get("avg_hr") or 0
+                a_dur    = act.get("duration_seconds") or 0
+                if a_avg_hr > 0 and a_dur > 0:
+                    hr_res = _clamp((a_avg_hr - rhr) / max(max_hr - rhr, 1), 0, 1)
+                    trimp  = (a_dur / 60) * hr_res * 0.64 * math.exp(1.92 * hr_res)
                     act_load = trimp * 144 * mult
                 else:
                     act_load = 0
@@ -452,20 +489,23 @@ def calc_strain_score(target_date: date = None, recovery_score: int = 50) -> dic
 
         label = (
             "Recovery / light day" if strain <= 33 else
-            "Moderate training" if strain <= 55 else
-            "Hard training" if strain <= 77 else
+            "Moderate training"    if strain <= 55 else
+            "Hard training"        if strain <= 77 else
             "Very hard / race effort"
         )
 
         insight = _strain_insight(strain, target, zone_totals)
 
-        # Load breakdown — what contributed to today's strain
-        activity_strain = round(_clamp(((total_load - step_load - cal_load - stress_load) / MAX_LOAD) * 100))
+        # ── Load breakdown ──────────────────────────────────────────────
+        activity_strain_val = round(_clamp(((total_load - bg_load_today) / MAX_LOAD) * 100))
         load_breakdown = {
-            "activities": max(0, activity_strain),
-            "steps": round(_clamp((step_load / MAX_LOAD) * 100)),
-            "calories": round(_clamp((cal_load / MAX_LOAD) * 100)),
-            "stress": round(_clamp((stress_load / MAX_LOAD) * 100)),
+            "activities": max(0, activity_strain_val),
+            "steps":    round(_clamp((step_load   / MAX_LOAD) * 100)),
+            "calories": round(_clamp((cal_load    / MAX_LOAD) * 100)),
+            "stress":   round(_clamp((stress_load / MAX_LOAD) * 100)),
+            "background_today":    bg_today_strain,
+            "background_baseline": bg_baseline_strain,
+            "background_context":  bg_context,
             "activity_list": [
                 {"name": dict(a)["name"], "type": dict(a)["type"],
                  "strain": round(dict(a).get("strain") or 0),
@@ -475,9 +515,14 @@ def calc_strain_score(target_date: date = None, recovery_score: int = 50) -> dic
             ],
         }
 
-        # Workout prescriptions — what would hit the remaining target
-        remaining = max(0, target - round(strain))
-        prescriptions = _prescribe_workouts(remaining, rhr, max_hr)
+        # ── Workout prescriptions ───────────────────────────────────────
+        # Target for exercise = total target minus predicted background.
+        # Use today's background if it's already known, otherwise the baseline.
+        predicted_bg = bg_today_strain if (steps > 0 or avg_stress > 0) else bg_baseline_strain
+        activity_target = max(0, target - predicted_bg)
+        activity_done   = max(0, activity_strain_val)
+        exercise_remaining = max(0, activity_target - activity_done)
+        prescriptions = _prescribe_workouts(exercise_remaining, rhr, max_hr)
 
         return {
             "score": round(strain),
@@ -487,7 +532,11 @@ def calc_strain_score(target_date: date = None, recovery_score: int = 50) -> dic
             "insight": insight,
             "load_breakdown": load_breakdown,
             "prescriptions": prescriptions,
-            "remaining_to_target": remaining,
+            "remaining_to_target": max(0, target - round(strain)),
+            "activity_target": activity_target,
+            "exercise_remaining": exercise_remaining,
+            "background_baseline": bg_baseline_strain,
+            "background_today": bg_today_strain,
         }
 
 

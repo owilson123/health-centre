@@ -72,9 +72,16 @@ export interface StrainScore {
     steps: number
     calories: number
     stress: number
+    background_today: number
+    background_baseline: number
+    background_context: string
     activity_list: Array<{ name: string; type: string; strain: number; duration_seconds: number; avg_hr: number | null }>
   }
   prescriptions: WorkoutPrescription[]
+  activity_target: number
+  exercise_remaining: number
+  background_baseline: number
+  background_today: number
 }
 
 export interface CalorieData {

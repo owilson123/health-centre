@@ -335,7 +335,6 @@ function WorkoutCard({ w, accent }: { w: WorkoutPrescription; accent: string }) 
 function StrainModal({ strain, onClose }: { strain: StrainScore; onClose: () => void }) {
   const accent = '#f59e0b'
   const remaining = strain.remaining_to_target
-  const alreadyHit = remaining <= 0
 
   const zoneData = [
     { label: 'Z1', minutes: strain.zones.zone1_minutes, color: '#3b82f6' },
@@ -393,15 +392,15 @@ function StrainModal({ strain, onClose }: { strain: StrainScore; onClose: () => 
                 <div className="text-right">
                   <p className="text-xs text-white/40 uppercase tracking-wider mb-1">Target</p>
                   <p className="text-4xl font-bold text-white/70">{strain.target}</p>
-                  <p className="text-sm mt-0.5" style={{ color: alreadyHit ? '#22c55e' : accent }}>
-                    {alreadyHit ? '✓ Target hit' : `${remaining} remaining`}
+                  <p className="text-sm mt-0.5" style={{ color: remaining <= 0 ? '#22c55e' : accent }}>
+                    {remaining <= 0 ? '✓ Target hit' : `${remaining} remaining`}
                   </p>
                 </div>
               </div>
               {/* Progress bar */}
               <div className="h-2 bg-white/10 rounded-full overflow-hidden">
                 <motion.div className="h-full rounded-full"
-                  style={{ backgroundColor: alreadyHit ? '#22c55e' : accent }}
+                  style={{ backgroundColor: remaining <= 0 ? '#22c55e' : accent }}
                   initial={{ width: 0 }}
                   animate={{ width: `${Math.min((strain.score / Math.max(strain.target, 1)) * 100, 100)}%` }}
                   transition={{ duration: 0.8, ease: 'easeOut' }} />
@@ -437,42 +436,68 @@ function StrainModal({ strain, onClose }: { strain: StrainScore; onClose: () => 
               </div>
             </div>
 
-            {/* Load breakdown */}
+            {/* Background load intelligence */}
             <div className="rounded-2xl bg-white/5 border border-white/8 p-4">
-              <p className="text-xs text-white/40 uppercase tracking-wider mb-3">What built your strain</p>
-              <div className="space-y-2.5">
+              <p className="text-xs text-white/40 uppercase tracking-wider mb-3">Daily life load</p>
+              <div className="flex items-center justify-between mb-3">
+                <div className="text-center flex-1">
+                  <p className="text-xs text-white/40 mb-1">Today</p>
+                  <p className="text-2xl font-bold text-white">{strain.background_today}</p>
+                </div>
+                <div className="w-px h-10 bg-white/10" />
+                <div className="text-center flex-1">
+                  <p className="text-xs text-white/40 mb-1">Your 30-day avg</p>
+                  <p className="text-2xl font-bold text-white/50">{strain.background_baseline}</p>
+                </div>
+                <div className="w-px h-10 bg-white/10" />
+                <div className="text-center flex-1">
+                  <p className="text-xs text-white/40 mb-1">Exercise target</p>
+                  <p className="text-2xl font-bold" style={{ color: accent }}>{strain.activity_target}</p>
+                </div>
+              </div>
+              <p className="text-xs text-white/50 leading-relaxed">
+                Background load is {strain.load_breakdown.background_context}. Your exercise target
+                is <span className="text-white font-semibold">{strain.activity_target}</span> strain
+                ({strain.target} total − {strain.background_today} background).
+              </p>
+              <div className="space-y-2 mt-3">
                 {breakdown.filter(b => b.value > 0).map(b => (
                   <div key={b.label} className="flex items-center gap-3">
-                    <span className="text-xs text-white/50 w-20 shrink-0">{b.label}</span>
-                    <div className="flex-1 h-2 bg-white/10 rounded-full overflow-hidden">
+                    <span className="text-xs text-white/40 w-20 shrink-0">{b.label}</span>
+                    <div className="flex-1 h-1.5 bg-white/10 rounded-full overflow-hidden">
                       <motion.div className="h-full rounded-full"
                         style={{ backgroundColor: b.color }}
                         initial={{ width: 0 }}
-                        animate={{ width: `${(b.value / Math.max(strain.score, 1)) * 100}%` }}
+                        animate={{ width: `${(b.value / Math.max(strain.target, 1)) * 100}%` }}
                         transition={{ duration: 0.7, ease: 'easeOut' }} />
                     </div>
-                    <span className="text-xs font-semibold text-white/60 w-6 text-right">{b.value}</span>
+                    <span className="text-xs text-white/50 w-5 text-right">{b.value}</span>
                   </div>
                 ))}
-                {strain.load_breakdown.activity_list.length > 0 && (
-                  <div className="pt-2 mt-1 border-t border-white/5 space-y-2">
-                    {strain.load_breakdown.activity_list.map((a, i) => (
-                      <div key={i} className="flex items-center justify-between">
-                        <div className="flex items-center gap-2">
-                          <div className="w-1.5 h-1.5 rounded-full bg-amber-400/60" />
-                          <span className="text-xs text-white/60 truncate max-w-[140px]">{a.name}</span>
-                        </div>
-                        <div className="flex items-center gap-2 text-xs text-white/40">
-                          {a.avg_hr && <span>{a.avg_hr} bpm</span>}
-                          <span>{formatDuration(a.duration_seconds)}</span>
-                          <span className="font-semibold text-amber-400">{a.strain}</span>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                )}
               </div>
             </div>
+
+            {/* Load breakdown — activities */}
+            {strain.load_breakdown.activity_list.length > 0 && (
+              <div className="rounded-2xl bg-white/5 border border-white/8 p-4">
+                <p className="text-xs text-white/40 uppercase tracking-wider mb-3">Workouts today</p>
+                <div className="space-y-2.5">
+                  {strain.load_breakdown.activity_list.map((a, i) => (
+                    <div key={i} className="flex items-center justify-between">
+                      <div className="flex items-center gap-2">
+                        <div className="w-1.5 h-1.5 rounded-full bg-amber-400/70" />
+                        <span className="text-sm text-white/70 truncate max-w-[150px]">{a.name}</span>
+                      </div>
+                      <div className="flex items-center gap-2 text-xs text-white/40">
+                        {a.avg_hr && <span>{a.avg_hr} bpm</span>}
+                        <span>{formatDuration(a.duration_seconds)}</span>
+                        <span className="font-bold text-amber-400 text-sm">{a.strain}</span>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
 
             {/* HR zone breakdown */}
             {zoneData.some(z => z.minutes > 0) && (
@@ -496,12 +521,15 @@ function StrainModal({ strain, onClose }: { strain: StrainScore; onClose: () => 
               </div>
             )}
 
-            {/* Workout prescriptions */}
-            {!alreadyHit && strain.prescriptions.length > 0 && (
+            {/* Workout prescriptions — calibrated to exercise gap */}
+            {strain.exercise_remaining > 0 && strain.prescriptions.length > 0 && (
               <div>
-                <p className="text-xs text-white/40 uppercase tracking-wider mb-3">
-                  Workouts to hit your target
-                </p>
+                <div className="mb-3">
+                  <p className="text-xs text-white/40 uppercase tracking-wider">To hit your exercise target</p>
+                  <p className="text-xs text-white/30 mt-0.5">
+                    {strain.exercise_remaining} strain still needed from exercise
+                  </p>
+                </div>
                 <div className="space-y-3">
                   {strain.prescriptions.map((w, i) => (
                     <WorkoutCard key={i} w={w} accent={accent} />
@@ -510,10 +538,10 @@ function StrainModal({ strain, onClose }: { strain: StrainScore; onClose: () => 
               </div>
             )}
 
-            {alreadyHit && (
+            {strain.exercise_remaining <= 0 && (
               <div className="rounded-2xl bg-green-500/10 border border-green-500/20 p-4 text-center">
-                <p className="text-green-400 font-semibold mb-1">Target reached 🎯</p>
-                <p className="text-sm text-white/50">You&apos;ve hit your strain target for today. Focus on recovery.</p>
+                <p className="text-green-400 font-semibold mb-1">Exercise target reached 🎯</p>
+                <p className="text-sm text-white/50">You&apos;ve covered your exercise strain for today. Focus on recovery.</p>
               </div>
             )}
 
