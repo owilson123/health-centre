@@ -357,7 +357,7 @@ function TemplateBuilder({ onClose, existing }: { onClose: () => void; existing?
         animate={{ y: 0 }}
         exit={{ y: '100%' }}
         transition={{ type: 'spring', damping: 28, stiffness: 300 }}
-        className="fixed inset-0 z-40 flex flex-col bg-[#0f0f0f]"
+        className="fixed inset-0 z-[60] flex flex-col bg-[#0f0f0f]"
       >
         <div className="flex items-center gap-3 px-4 pt-6 pb-4">
           <button onClick={onClose} className="p-2 text-white/50 active:text-white">
@@ -753,7 +753,7 @@ function ActiveSession({
         animate={{ y: 0 }}
         exit={{ y: '100%' }}
         transition={{ type: 'spring', damping: 28, stiffness: 300 }}
-        className="fixed inset-0 z-40 flex flex-col bg-[#0a0a0a]"
+        className="fixed inset-0 z-[60] flex flex-col bg-[#0a0a0a]"
         style={{ paddingTop: 'env(safe-area-inset-top)', paddingBottom: 'env(safe-area-inset-bottom)' }}
       >
         {/* ── Header ── */}
@@ -974,7 +974,7 @@ function SessionDetailSheet({ sid, onClose, onDeleted }: { sid: number; onClose:
     <motion.div
       initial={{ y: '100%' }} animate={{ y: 0 }} exit={{ y: '100%' }}
       transition={{ type: 'spring', damping: 28, stiffness: 300 }}
-      className="fixed inset-0 z-40 flex items-center justify-center bg-[#0f0f0f]"
+      className="fixed inset-0 z-[60] flex items-center justify-center bg-[#0f0f0f]"
     >
       <div className="w-8 h-8 rounded-full border-2 border-white/10 border-t-indigo-500 animate-spin" />
     </motion.div>
@@ -987,7 +987,7 @@ function SessionDetailSheet({ sid, onClose, onDeleted }: { sid: number; onClose:
     <motion.div
       initial={{ y: '100%' }} animate={{ y: 0 }} exit={{ y: '100%' }}
       transition={{ type: 'spring', damping: 28, stiffness: 300 }}
-      className="fixed inset-0 z-40 flex flex-col bg-[#0f0f0f]"
+      className="fixed inset-0 z-[60] flex flex-col bg-[#0f0f0f]"
     >
       <div className="flex items-center gap-3 px-4 pt-6 pb-4">
         <button onClick={onClose} className="p-2 text-white/50 active:text-white">

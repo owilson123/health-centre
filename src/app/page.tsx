@@ -2,7 +2,8 @@
 
 import { useCallback, useRef, useState } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { RefreshCw, Clock, Zap, TrendingUp, TrendingDown, Minus, Settings, LogOut, X, ChevronRight, Flame, Brain, Heart, Battery, Wind, Dumbbell, Bike, PersonStanding, Timer, Target } from 'lucide-react'
+import { RefreshCw, Clock, Zap, TrendingUp, TrendingDown, Minus, Settings, X, ChevronRight, Flame, Brain, Heart, Battery, Wind, Dumbbell, Bike, PersonStanding, Timer, Target } from 'lucide-react'
+import { useRouter } from 'next/navigation'
 import { api } from '@/lib/api'
 import { ScoreRing } from '@/components/ui/ScoreRing'
 import { GlassCard } from '@/components/ui/GlassCard'
@@ -12,7 +13,6 @@ import { useDashboard } from '@/lib/hooks'
 import { getGreeting, scoreColor, scoreLabel } from '@/lib/utils'
 import type { RecoveryScore, StrainScore, WorkoutPrescription } from '@/lib/types'
 import { formatDuration } from '@/lib/utils'
-import { clearSession, getUser } from '@/lib/auth'
 
 function CalorieArc({ current, predicted }: { current: number; predicted: number }) {
   const pct = Math.min(current / Math.max(predicted, 1), 1)
@@ -559,23 +559,11 @@ function StrainModal({ strain, onClose }: { strain: StrainScore; onClose: () => 
 }
 
 export default function OverviewPage() {
+  const router = useRouter()
   const { data, loading, syncing, error, refresh } = useDashboard()
   const touchStartY = useRef(0)
-  const [showSettings, setShowSettings] = useState(false)
   const [showTrainingLoad, setShowTrainingLoad] = useState(false)
   const [showStrain, setShowStrain] = useState(false)
-
-  const user = getUser()
-
-  const handleDisconnect = useCallback(async () => {
-    await api.disconnectGarmin()
-    window.location.reload()
-  }, [])
-
-  const handleLogout = useCallback(() => {
-    clearSession()
-    window.location.reload()
-  }, [])
 
   const onTouchStart = useCallback((e: React.TouchEvent) => {
     touchStartY.current = e.touches[0].clientY
@@ -610,7 +598,7 @@ export default function OverviewPage() {
             <RefreshCw size={16} className={syncing ? 'animate-spin text-white/60' : 'text-white/60'} />
           </button>
           <button
-            onClick={() => setShowSettings(s => !s)}
+            onClick={() => router.push('/settings')}
             className="w-10 h-10 flex items-center justify-center rounded-full glass active:scale-95 transition-transform"
           >
             <Settings size={16} className="text-white/60" />
@@ -618,50 +606,8 @@ export default function OverviewPage() {
         </div>
       </div>
 
-      {/* Settings drawer */}
-      <AnimatePresence>
-        {showSettings && (
-          <motion.div
-            initial={{ opacity: 0, y: -8 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: -8 }}
-            transition={{ duration: 0.2 }}
-            className="glass-card p-4 mb-4"
-          >
-            <div className="flex items-center justify-between mb-3">
-              <p className="text-xs text-white/40 uppercase tracking-wider">Settings</p>
-              <button onClick={() => setShowSettings(false)} className="text-white/30 active:text-white/60">
-                <X size={16} />
-              </button>
-            </div>
-            {user && (
-              <div className="flex items-center gap-3 p-3 rounded-xl bg-white/5 mb-3">
-                <div className="w-8 h-8 rounded-xl bg-indigo-500/20 flex items-center justify-center text-xs font-bold text-indigo-300">
-                  {user.display}
-                </div>
-                <div>
-                  <p className="text-sm font-medium text-white/80">Signed in as {user.display}</p>
-                  <button onClick={handleLogout} className="text-xs text-white/30 active:text-white/60 underline underline-offset-2 mt-0.5">
-                    Switch user
-                  </button>
-                </div>
-              </div>
-            )}
-            <button
-              onClick={handleDisconnect}
-              className="flex items-center gap-3 w-full p-3 rounded-xl bg-red-500/10 border border-red-500/20 active:bg-red-500/20 transition-colors"
-            >
-              <LogOut size={15} className="text-red-400" />
-              <div className="text-left">
-                <p className="text-sm font-medium text-red-400">Disconnect Garmin</p>
-                <p className="text-xs text-white/30">Remove stored credentials and sign out</p>
-              </div>
-            </button>
-          </motion.div>
-        )}
-      </AnimatePresence>
 
-      {error && (
+{error && (
         <div className="glass-card p-4 mb-4 border-red-500/20 bg-red-500/5">
           <p className="text-sm text-red-400">{error}</p>
         </div>
