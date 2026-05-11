@@ -126,6 +126,25 @@ def clear_sleep_data(user_id: str = Depends(get_current_user)):
     return {"status": "cleared", "message": "Sleep data wiped. Pull to refresh on the app to re-sync."}
 
 
+@app.delete("/admin/wipe-my-data")
+def wipe_all_data(user_id: str = Depends(get_current_user)):
+    """Wipe every table for the current user's health DB and disconnect Garmin."""
+    tables = [
+        "sleep", "hrv", "body_battery", "stress", "steps",
+        "activities", "user_profile", "sync_log", "credentials",
+    ]
+    with db() as conn:
+        for t in tables:
+            try:
+                conn.execute(f"DELETE FROM {t}")
+            except Exception:
+                pass  # table may not exist on older schemas
+    import garmin_sync
+    garmin_sync._clients[user_id] = None
+    logger.info(f"[{user_id}] All health data wiped by user request")
+    return {"status": "wiped", "user": user_id, "tables_cleared": tables}
+
+
 @app.get("/admin/recalculate-strain")
 def recalculate_strain(days: int = 90, user_id: str = Depends(get_current_user)):
     from garmin_sync import _backfill_strain
