@@ -15,11 +15,13 @@ from pydantic import BaseModel
 from database import init_db, db, _current_user
 from garmin_sync import sync_all, test_credentials, get_stored_credentials, reset_client
 from metrics import calc_sleep_score, calc_recovery_score, calc_strain_score, calc_calories
+from training import router as training_router, init_training_db
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 app = FastAPI(title="Health Centre API", version="1.0.0")
+app.include_router(training_router)
 
 ALLOWED_ORIGINS = os.environ.get("ALLOWED_ORIGINS", "*").split(",")
 app.add_middleware(
@@ -82,6 +84,7 @@ def get_current_user(
 def startup():
     for uid in USERS:
         init_db(uid)
+        init_training_db(uid)
         logger.info(f"Database initialised for user {uid}")
 
 
