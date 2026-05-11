@@ -271,9 +271,34 @@ def calc_recovery_score(target_date: date = None, sleep_score: Optional[int] = N
         }
 
 
+def _cardio_strain_from_row(act: dict) -> float:
+    """Compute TRIMP-based strain from a single activity row.
+
+    Priority:
+      1. Zone seconds (always present after sync, no write-back dependency)
+      2. Stored activities.strain (fallback for old rows without zone data)
+      3. 0 if neither is available
+
+    This keeps ACWR stable regardless of whether calc_strain_score has been
+    called for that specific date yet.
+    """
+    ZONE_WEIGHTS = {1: 1.0, 2: 2.0, 3: 4.0, 4: 8.0, 5: 16.0}
+    MAX_LOAD = 28800.0
+
+    zone_secs = sum((act.get(f"zone{z}_seconds") or 0) for z in range(1, 6))
+    if zone_secs > 0:
+        load = sum((act.get(f"zone{z}_seconds") or 0) * ZONE_WEIGHTS[z] for z in range(1, 6))
+        return _clamp((load / MAX_LOAD) * 100)
+
+    # Fallback: stored value written by a previous calc_strain_score call
+    stored = act.get("strain") or 0
+    if stored > 0:
+        return float(stored)
+
+    return 0.0
+
+
 def _calc_acwr(conn, target_date: date) -> tuple[float, str, float, float]:
-    # Exclude Garmin strength activities — strain=0 is written to them so this
-    # WHERE clause is belt-and-braces, but also future-proof.
     _ST = ("strength_training", "gym_and_fitness_equipment",
            "functional_training", "crossfit", "weightlifting")
     _ph = ",".join("?" * len(_ST))
@@ -282,18 +307,28 @@ def _calc_acwr(conn, target_date: date) -> tuple[float, str, float, float]:
     chronic_start = (target_date - timedelta(days=28)).isoformat()
     today         = target_date.isoformat()
 
-    # ── Cardio strain (Garmin TRIMP, strength types excluded) ──────────
-    acute_cardio = (conn.execute(
-        f"SELECT COALESCE(SUM(strain),0) FROM activities "
-        f"WHERE date > ? AND date <= ? AND type NOT IN ({_ph})",
+    # ── Cardio strain — computed from zone seconds (not stored strain column) ──
+    # This avoids the write-back ordering problem: calc_recovery_score runs before
+    # calc_strain_score, so activities.strain for today is not yet written on the
+    # first dashboard load. Computing from zones is deterministic and immediate.
+    acute_rows = conn.execute(
+        f"""SELECT type, zone1_seconds, zone2_seconds, zone3_seconds,
+                   zone4_seconds, zone5_seconds, strain
+            FROM activities
+            WHERE date > ? AND date <= ? AND type NOT IN ({_ph})""",
         (acute_start, today, *_ST)
-    ).fetchone()[0])
+    ).fetchall()
 
-    chronic_cardio = (conn.execute(
-        f"SELECT COALESCE(SUM(strain),0) FROM activities "
-        f"WHERE date > ? AND date <= ? AND type NOT IN ({_ph})",
+    chronic_rows = conn.execute(
+        f"""SELECT type, zone1_seconds, zone2_seconds, zone3_seconds,
+                   zone4_seconds, zone5_seconds, strain
+            FROM activities
+            WHERE date > ? AND date <= ? AND type NOT IN ({_ph})""",
         (chronic_start, today, *_ST)
-    ).fetchone()[0])
+    ).fetchall()
+
+    acute_cardio   = sum(_cardio_strain_from_row(dict(r)) for r in acute_rows)
+    chronic_cardio = sum(_cardio_strain_from_row(dict(r)) for r in chronic_rows)
 
     # ── Strength strain (INOL from training tab) ────────────────────────
     try:
