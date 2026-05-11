@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect, useCallback } from 'react'
+import React, { useState, useEffect, useCallback, useRef } from 'react'
 import { motion, AnimatePresence, useMotionValue, useTransform } from 'framer-motion'
 import {
   Plus, X, ChevronRight, Dumbbell, Clock,
@@ -460,6 +460,112 @@ function DupBadge({ rec }: { rec: import('@/lib/api').DupRecommendation }) {
   )
 }
 
+// ─── Rest Timer ──────────────────────────────────────────────────────────────
+
+const REST_DEFAULT = 105 // 1 min 45 s
+
+function RestTimer({
+  initialSeconds,
+  onDone,
+  onSkip,
+  onAdjust,
+}: {
+  initialSeconds: number
+  onDone: () => void
+  onSkip: () => void
+  onAdjust: (delta: number) => void
+}) {
+  const [seconds, setSeconds] = useState(initialSeconds)
+  const doneRef = useRef(false)
+
+  // Keep seconds in sync if parent adjusts total
+  useEffect(() => { setSeconds(s => Math.max(1, s + (initialSeconds - REST_DEFAULT))) }, [initialSeconds])
+
+  useEffect(() => {
+    if (seconds <= 0 && !doneRef.current) {
+      doneRef.current = true
+      try { navigator.vibrate?.([180, 80, 180, 80, 360]) } catch {}
+      const t = setTimeout(onDone, 1800)
+      return () => clearTimeout(t)
+    }
+    const id = setInterval(() => setSeconds(s => s - 1), 1000)
+    return () => clearInterval(id)
+  }, [seconds, onDone])
+
+  const pct = Math.max(0, seconds / initialSeconds)
+  const mins = Math.floor(seconds / 60)
+  const secs = Math.max(0, seconds % 60)
+
+  // SVG ring
+  const R = 26
+  const circ = 2 * Math.PI * R
+  const dash = circ * pct
+
+  const done = seconds <= 0
+
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: 10 }}
+      animate={{ opacity: 1, y: 0 }}
+      exit={{ opacity: 0, y: 6 }}
+      className={`flex items-center gap-3 rounded-2xl px-4 py-3 border ${
+        done
+          ? 'bg-green-500/15 border-green-500/30'
+          : 'bg-indigo-500/10 border-indigo-500/20'
+      }`}
+    >
+      {/* Countdown ring */}
+      <div className="relative flex-shrink-0 w-14 h-14 flex items-center justify-center">
+        <svg width="56" height="56" className="-rotate-90 absolute inset-0">
+          <circle cx="28" cy="28" r={R} fill="none" stroke="rgba(255,255,255,0.06)" strokeWidth="3" />
+          <circle
+            cx="28" cy="28" r={R} fill="none"
+            stroke={done ? '#22c55e' : '#6366f1'}
+            strokeWidth="3"
+            strokeLinecap="round"
+            strokeDasharray={circ}
+            strokeDashoffset={circ - dash}
+            style={{ transition: 'stroke-dashoffset 0.9s linear, stroke 0.3s' }}
+          />
+        </svg>
+        <span className={`text-sm font-bold tabular-nums z-10 ${done ? 'text-green-400' : 'text-white'}`}>
+          {done ? '✓' : `${mins}:${secs.toString().padStart(2, '0')}`}
+        </span>
+      </div>
+
+      {/* Label + adjust */}
+      <div className="flex-1 min-w-0">
+        <p className={`text-xs font-semibold ${done ? 'text-green-400' : 'text-indigo-300'}`}>
+          {done ? 'Rest complete' : 'Resting…'}
+        </p>
+        {!done && (
+          <div className="flex items-center gap-2 mt-1">
+            <button
+              onPointerDown={e => e.stopPropagation()}
+              onClick={() => { setSeconds(s => Math.max(5, s - 15)); onAdjust(-15) }}
+              className="text-[11px] text-white/40 active:text-white bg-white/8 rounded-lg px-2 py-0.5"
+            >−15s</button>
+            <button
+              onPointerDown={e => e.stopPropagation()}
+              onClick={() => { setSeconds(s => s + 15); onAdjust(+15) }}
+              className="text-[11px] text-white/40 active:text-white bg-white/8 rounded-lg px-2 py-0.5"
+            >+15s</button>
+          </div>
+        )}
+      </div>
+
+      {/* Skip */}
+      <button
+        onPointerDown={e => e.stopPropagation()}
+        onClick={onSkip}
+        className="flex-shrink-0 text-xs text-white/30 active:text-white/70 px-2 py-1"
+      >
+        {done ? 'OK' : 'Skip'}
+      </button>
+    </motion.div>
+  )
+}
+
 // ─── Active Session ───────────────────────────────────────────────────────────
 
 interface ActiveSet {
@@ -565,6 +671,8 @@ function ActiveSession({
   const [allExercises, setAllExercises] = useState<TrainingExercise[]>(session.exercises)
   const [finishing, setFinishing] = useState(false)
   const [finishStrain, setFinishStrain] = useState<number | null>(null)
+  const [restActive, setRestActive] = useState(false)
+  const [restTotal, setRestTotal] = useState(REST_DEFAULT)
 
   useEffect(() => {
     allExercises.forEach(ex => {
@@ -626,6 +734,8 @@ function ActiveSession({
         cur[idx] = { ...cur[idx], saved: true, set_id: res.set_id }
         return { ...prev, [exId]: cur }
       })
+      // Start rest timer after saving a set
+      setRestActive(true)
     } catch {}
   }
 
@@ -770,8 +880,19 @@ function ActiveSession({
               ))}
             </div>
 
-            {/* Add set — pinned above bottom */}
-            <div className="px-4 pb-3 pt-2 flex-shrink-0">
+            {/* Rest timer + Add set — pinned above bottom */}
+            <div className="px-4 pb-3 pt-1 flex-shrink-0 space-y-2">
+              <AnimatePresence>
+                {restActive && (
+                  <RestTimer
+                    key={restTotal}
+                    initialSeconds={restTotal}
+                    onDone={() => setRestActive(false)}
+                    onSkip={() => setRestActive(false)}
+                    onAdjust={delta => setRestTotal(t => Math.max(15, t + delta))}
+                  />
+                )}
+              </AnimatePresence>
               <button
                 onClick={addSet}
                 className="w-full py-3 border border-dashed border-white/12 rounded-xl text-sm text-white/35 active:bg-white/5 flex items-center justify-center gap-1.5"
