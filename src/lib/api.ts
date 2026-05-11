@@ -89,6 +89,9 @@ export const api = {
   training: {
     getExercises:  (q = '', category = '') =>
       get<TrainingExercise[]>(`/training/exercises?q=${encodeURIComponent(q)}&category=${encodeURIComponent(category)}`),
+    createExercise: (body: { name: string; category: string; equipment: string }) =>
+      post<TrainingExercise>('/training/exercises', body),
+    deleteExercise: (id: number) => del('/training/exercises/' + id),
     getTemplates:  () => get<WorkoutTemplate[]>('/training/templates'),
     createTemplate: (body: { name: string; exercise_ids: number[] }) =>
       post<{ id: number; name: string }>('/training/templates', body),
@@ -121,6 +124,7 @@ export interface TrainingExercise {
   name: string
   category: string
   equipment: string
+  is_custom?: number
 }
 
 export interface WorkoutTemplate {

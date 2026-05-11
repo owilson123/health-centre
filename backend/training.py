@@ -21,7 +21,8 @@ def init_training_db(user_id: str | None = None):
             id        INTEGER PRIMARY KEY AUTOINCREMENT,
             name      TEXT NOT NULL UNIQUE,
             category  TEXT NOT NULL,
-            equipment TEXT NOT NULL
+            equipment TEXT NOT NULL,
+            is_custom INTEGER NOT NULL DEFAULT 0
         );
 
         CREATE TABLE IF NOT EXISTS workout_templates (
@@ -271,6 +272,15 @@ SCALE: dict[str, float | None] = {
     "Preacher Curl Machine":        0.30,
 }
 
+# Fallback scales for custom exercises not in SCALE dict, keyed by category
+DEFAULT_CATEGORY_SCALE: dict[str, float | None] = {
+    "Push": 0.70,
+    "Pull": 0.70,
+    "Legs": 0.60,
+    "Arms": 0.22,
+    "Core": None,   # reps only
+}
+
 # Dumbbell exercises where weight shown should be per-dumbbell (scale/2)
 DUMBBELL_PER_HAND = {
     "Dumbbell Bench Press", "Incline Dumbbell Press", "Dumbbell Shoulder Press",
@@ -342,9 +352,14 @@ def _dup_recommendation(conn, exercise_name: str, category: str) -> dict | None:
     Build a full DUP recommendation for an exercise.
     Returns None if no anchor data yet.
     """
-    scale = SCALE.get(exercise_name)
+    # Look up scale — known exercises first, then category default for custom ones
+    if exercise_name in SCALE:
+        scale = SCALE[exercise_name]
+    else:
+        scale = DEFAULT_CATEGORY_SCALE.get(category)
+
     if scale is None:
-        # Bodyweight exercise — give reps-only recommendation
+        # Bodyweight / Core / unknown — give reps-only recommendation
         phase = _dup_phase(conn, category)
         return {
             "phase": phase["name"],
@@ -355,7 +370,7 @@ def _dup_recommendation(conn, exercise_name: str, category: str) -> dict | None:
             "per_hand": False,
             "anchor_name": None,
             "anchor_1rm": None,
-            "note": "Bodyweight — focus on quality reps",
+            "note": "Focus on quality reps",
         }
 
     anchor_name = ANCHOR.get(category, "")
@@ -401,9 +416,13 @@ def _dup_recommendation(conn, exercise_name: str, category: str) -> dict | None:
         "anchor_name": anchor_name,
         "anchor_1rm":  round(anchor_1rm, 1),
         "note": (
-            f"Based on {anchor_name} est. 1RM {round(anchor_1rm)}kg"
-            if anchor_name != exercise_name
-            else f"Based on your best estimated 1RM {round(anchor_1rm)}kg"
+            f"Custom exercise — estimated from {anchor_name} ({round(anchor_1rm)}kg)"
+            if exercise_name not in SCALE
+            else (
+                f"Based on {anchor_name} est. 1RM {round(anchor_1rm)}kg"
+                if anchor_name != exercise_name
+                else f"Based on your best estimated 1RM {round(anchor_1rm)}kg"
+            )
         ),
     }
 
@@ -429,10 +448,18 @@ def _fmt_performance(sets: list) -> str | None:
 
 # ─── Routes ──────────────────────────────────────────────────────────────────
 
+class ExerciseCreate(BaseModel):
+    name:      str
+    category:  str
+    equipment: str
+
+
 @router.get("/exercises")
 def list_exercises(q: str = "", category: str = "", _uid: str = Depends(get_current_user)):
     with db() as conn:
-        rows = conn.execute("SELECT id, name, category, equipment FROM exercises ORDER BY category, name").fetchall()
+        rows = conn.execute(
+            "SELECT id, name, category, equipment, is_custom FROM exercises ORDER BY is_custom, category, name"
+        ).fetchall()
     result = [dict(r) for r in rows]
     if q:
         ql = q.lower()
@@ -440,6 +467,39 @@ def list_exercises(q: str = "", category: str = "", _uid: str = Depends(get_curr
     if category:
         result = [r for r in result if r["category"] == category]
     return result
+
+
+@router.post("/exercises", status_code=201)
+def create_exercise(body: ExerciseCreate, _uid: str = Depends(get_current_user)):
+    name = body.name.strip()
+    if not name:
+        raise HTTPException(400, "Exercise name is required")
+    with db() as conn:
+        existing = conn.execute(
+            "SELECT id FROM exercises WHERE LOWER(name) = LOWER(?)", (name,)
+        ).fetchone()
+        if existing:
+            raise HTTPException(409, "An exercise with this name already exists")
+        cur = conn.execute(
+            "INSERT INTO exercises (name, category, equipment, is_custom) VALUES (?, ?, ?, 1)",
+            (name, body.category, body.equipment)
+        )
+    return {"id": cur.lastrowid, "name": name, "category": body.category,
+            "equipment": body.equipment, "is_custom": 1}
+
+
+@router.delete("/exercises/{exercise_id}")
+def delete_exercise(exercise_id: int, _uid: str = Depends(get_current_user)):
+    with db() as conn:
+        row = conn.execute(
+            "SELECT is_custom FROM exercises WHERE id=?", (exercise_id,)
+        ).fetchone()
+        if not row:
+            raise HTTPException(404, "Exercise not found")
+        if not row["is_custom"]:
+            raise HTTPException(403, "Cannot delete built-in exercises")
+        conn.execute("DELETE FROM exercises WHERE id=?", (exercise_id,))
+    return {"status": "deleted"}
 
 
 @router.get("/templates")

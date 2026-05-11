@@ -36,6 +36,112 @@ const CATEGORIES = ['Push', 'Pull', 'Legs', 'Arms', 'Core']
 
 // ─── Exercise Picker Sheet ────────────────────────────────────────────────────
 
+const EQUIPMENT_OPTIONS = ['Barbell', 'Dumbbell', 'Cable', 'Machine', 'Bodyweight', 'Other']
+
+function CreateExerciseForm({ onCreated, onBack }: {
+  onCreated: (ex: TrainingExercise) => void
+  onBack: () => void
+}) {
+  const [name, setName]       = useState('')
+  const [category, setCategory] = useState(CATEGORIES[0])
+  const [equipment, setEquipment] = useState(EQUIPMENT_OPTIONS[0])
+  const [saving, setSaving]   = useState(false)
+  const [error, setError]     = useState('')
+
+  const save = async () => {
+    if (!name.trim()) return
+    setSaving(true)
+    setError('')
+    try {
+      const ex = await api.training.createExercise({ name: name.trim(), category, equipment })
+      onCreated(ex)
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : 'Failed to create exercise')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <motion.div
+      initial={{ x: '100%' }} animate={{ x: 0 }} exit={{ x: '100%' }}
+      transition={{ type: 'spring', damping: 28, stiffness: 300 }}
+      className="absolute inset-0 bg-[#0f0f0f] flex flex-col"
+    >
+      <div className="flex items-center gap-3 px-4 pt-6 pb-4">
+        <button onClick={onBack} className="p-2 text-white/50 active:text-white">
+          <X size={20} />
+        </button>
+        <h2 className="text-lg font-semibold flex-1">New Exercise</h2>
+        <button
+          onClick={save}
+          disabled={saving || !name.trim()}
+          className="px-4 py-1.5 bg-indigo-500 rounded-xl text-sm font-semibold disabled:opacity-40"
+        >
+          {saving ? 'Saving…' : 'Save'}
+        </button>
+      </div>
+
+      <div className="px-4 space-y-4 flex-1">
+        <div>
+          <p className="text-xs text-white/40 mb-1.5">Exercise name</p>
+          <input
+            value={name}
+            onChange={e => { setName(e.target.value); setError('') }}
+            placeholder="e.g. Landmine Press"
+            className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-sm text-white placeholder-white/20 outline-none focus:border-white/25"
+            autoFocus
+          />
+          {error && <p className="text-xs text-red-400 mt-1.5">{error}</p>}
+        </div>
+
+        <div>
+          <p className="text-xs text-white/40 mb-1.5">Category</p>
+          <div className="flex flex-wrap gap-2">
+            {CATEGORIES.map(c => (
+              <button
+                key={c}
+                onClick={() => setCategory(c)}
+                className={`px-3 py-2 rounded-xl text-sm font-medium transition-colors ${
+                  category === c ? 'bg-indigo-500 text-white' : 'bg-white/5 text-white/50'
+                }`}
+              >
+                {c}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <div>
+          <p className="text-xs text-white/40 mb-1.5">Equipment</p>
+          <div className="flex flex-wrap gap-2">
+            {EQUIPMENT_OPTIONS.map(e => (
+              <button
+                key={e}
+                onClick={() => setEquipment(e)}
+                className={`px-3 py-2 rounded-xl text-sm font-medium transition-colors ${
+                  equipment === e ? 'bg-indigo-500 text-white' : 'bg-white/5 text-white/50'
+                }`}
+              >
+                {e}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <div className="p-3 bg-white/4 rounded-xl">
+          <p className="text-xs text-white/40 leading-relaxed">
+            DUP recommendations for custom exercises use a category default scale
+            ({category === 'Push' ? '70% of bench' : category === 'Pull' ? '70% of row' :
+              category === 'Legs' ? '60% of squat' : category === 'Arms' ? '22% of bench' : 'reps only'}).
+            As you log sets the system will refine this automatically.
+          </p>
+        </div>
+      </div>
+    </motion.div>
+  )
+}
+
 function ExercisePicker({
   onSelect,
   onClose,
@@ -51,10 +157,13 @@ function ExercisePicker({
   const [q, setQ] = useState('')
   const [cat, setCat] = useState('')
   const [picked, setPicked] = useState<Set<number>>(new Set(selected))
+  const [creating, setCreating] = useState(false)
 
-  useEffect(() => {
+  const load = useCallback(() => {
     api.training.getExercises(q, cat).then(setExercises)
   }, [q, cat])
+
+  useEffect(() => { load() }, [load])
 
   const toggle = (ex: TrainingExercise) => {
     if (!multi) { onSelect([ex]); return }
@@ -69,13 +178,32 @@ function ExercisePicker({
     onSelect(exercises.filter(e => picked.has(e.id)))
   }
 
+  const handleCreated = (ex: TrainingExercise) => {
+    setCreating(false)
+    load()
+    if (!multi) {
+      onSelect([ex])
+    } else {
+      setPicked(prev => new Set(prev).add(ex.id))
+    }
+  }
+
+  const handleDeleteCustom = async (ex: TrainingExercise, e: React.MouseEvent) => {
+    e.stopPropagation()
+    try {
+      await api.training.deleteExercise(ex.id)
+      setExercises(prev => prev.filter(x => x.id !== ex.id))
+      setPicked(prev => { const n = new Set(prev); n.delete(ex.id); return n })
+    } catch {}
+  }
+
   return (
     <motion.div
       initial={{ y: '100%' }}
       animate={{ y: 0 }}
       exit={{ y: '100%' }}
       transition={{ type: 'spring', damping: 28, stiffness: 300 }}
-      className="fixed inset-0 z-50 flex flex-col bg-[#0f0f0f]"
+      className="fixed inset-0 z-50 flex flex-col bg-[#0f0f0f] overflow-hidden"
     >
       {/* Header */}
       <div className="flex items-center gap-3 px-4 pt-6 pb-3">
@@ -124,6 +252,7 @@ function ExercisePicker({
       <div className="flex-1 overflow-y-auto px-4 pb-6 space-y-1">
         {exercises.map(ex => {
           const sel = picked.has(ex.id)
+          const isCustom = !!ex.is_custom
           return (
             <button
               key={ex.id}
@@ -133,17 +262,47 @@ function ExercisePicker({
               }`}
             >
               <div className="flex-1 text-left">
-                <p className="text-sm font-medium text-white">{ex.name}</p>
+                <div className="flex items-center gap-1.5">
+                  <p className="text-sm font-medium text-white">{ex.name}</p>
+                  {isCustom && <span className="text-[9px] text-indigo-400 bg-indigo-400/10 px-1.5 py-0.5 rounded-full font-medium">Custom</span>}
+                </div>
                 <p className="text-xs text-white/40 mt-0.5">{ex.equipment}</p>
               </div>
               <span className={`text-[10px] px-2 py-0.5 rounded-full font-medium ${CATEGORY_COLORS[ex.category] ?? 'bg-white/10 text-white/50'}`}>
                 {ex.category}
               </span>
+              {isCustom && (
+                <button
+                  onClick={e => handleDeleteCustom(ex, e)}
+                  className="p-1 text-white/20 active:text-red-400"
+                >
+                  <Trash2 size={13} />
+                </button>
+              )}
               {multi && sel && <Check size={15} className="text-indigo-400 flex-shrink-0" />}
             </button>
           )
         })}
+
+        {/* Create custom exercise */}
+        <button
+          onClick={() => setCreating(true)}
+          className="w-full flex items-center justify-center gap-2 py-3.5 border border-dashed border-white/10 rounded-xl text-white/40 text-sm active:bg-white/5 mt-2"
+        >
+          <Plus size={15} />
+          Create custom exercise
+        </button>
       </div>
+
+      {/* Slide-in create form */}
+      <AnimatePresence>
+        {creating && (
+          <CreateExerciseForm
+            onBack={() => setCreating(false)}
+            onCreated={handleCreated}
+          />
+        )}
+      </AnimatePresence>
     </motion.div>
   )
 }
