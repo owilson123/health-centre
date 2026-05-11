@@ -2,7 +2,7 @@
 
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
-import { Home, Moon, Activity, Flame, Dumbbell } from 'lucide-react'
+import { Home, Moon, Activity, Flame, Dumbbell, Settings } from 'lucide-react'
 import { cn } from '@/lib/utils'
 
 const tabs = [
@@ -11,6 +11,7 @@ const tabs = [
   { href: '/activities', label: 'Activities', icon: Activity },
   { href: '/calories',   label: 'Calories',   icon: Flame },
   { href: '/training',   label: 'Training',   icon: Dumbbell },
+  { href: '/settings',   label: 'Settings',   icon: Settings },
 ]
 
 export function BottomNav() {

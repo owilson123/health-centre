@@ -78,6 +78,7 @@ export const api = {
   connectGarmin: (email: string, password: string) =>
     post<{ status: string; email: string }>('/auth/connect', { email, password }),
   disconnectGarmin: () => post('/auth/disconnect'),
+  wipeMyData: () => del<{ status: string }>('/admin/wipe-my-data'),
 
   // Data
   getDashboard:  () => get<DashboardData>('/dashboard'),
