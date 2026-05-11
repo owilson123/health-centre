@@ -12,6 +12,7 @@ import { useDashboard } from '@/lib/hooks'
 import { getGreeting, scoreColor, scoreLabel } from '@/lib/utils'
 import type { RecoveryScore, StrainScore, WorkoutPrescription } from '@/lib/types'
 import { formatDuration } from '@/lib/utils'
+import { clearSession, getUser } from '@/lib/auth'
 
 function CalorieArc({ current, predicted }: { current: number; predicted: number }) {
   const pct = Math.min(current / Math.max(predicted, 1), 1)
@@ -564,8 +565,15 @@ export default function OverviewPage() {
   const [showTrainingLoad, setShowTrainingLoad] = useState(false)
   const [showStrain, setShowStrain] = useState(false)
 
+  const user = getUser()
+
   const handleDisconnect = useCallback(async () => {
     await api.disconnectGarmin()
+    window.location.reload()
+  }, [])
+
+  const handleLogout = useCallback(() => {
+    clearSession()
     window.location.reload()
   }, [])
 
@@ -626,6 +634,19 @@ export default function OverviewPage() {
                 <X size={16} />
               </button>
             </div>
+            {user && (
+              <div className="flex items-center gap-3 p-3 rounded-xl bg-white/5 mb-3">
+                <div className="w-8 h-8 rounded-xl bg-indigo-500/20 flex items-center justify-center text-xs font-bold text-indigo-300">
+                  {user.display}
+                </div>
+                <div>
+                  <p className="text-sm font-medium text-white/80">Signed in as {user.display}</p>
+                  <button onClick={handleLogout} className="text-xs text-white/30 active:text-white/60 underline underline-offset-2 mt-0.5">
+                    Switch user
+                  </button>
+                </div>
+              </div>
+            )}
             <button
               onClick={handleDisconnect}
               className="flex items-center gap-3 w-full p-3 rounded-xl bg-red-500/10 border border-red-500/20 active:bg-red-500/20 transition-colors"

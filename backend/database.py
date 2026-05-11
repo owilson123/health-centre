@@ -2,24 +2,38 @@ import os
 import sqlite3
 from pathlib import Path
 from contextlib import contextmanager
+from contextvars import ContextVar
 
-# On Railway, set DB_PATH env var to /data/health.db (persistent volume mounted at /data)
-# Locally defaults to backend/health.db
-_db_env = os.environ.get("DB_PATH")
-DB_PATH = Path(_db_env) if _db_env else Path(__file__).parent / "health.db"
-DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+# ── Per-user DB paths ─────────────────────────────────────────────────────────
+# On Railway set DB_DIR=/data (persistent volume). Locally defaults to backend/.
+_db_dir_env = os.environ.get("DB_DIR") or os.environ.get("DB_PATH", "").replace("health.db", "").rstrip("/\\")
+DB_DIR = Path(_db_dir_env) if _db_dir_env else Path(__file__).parent
+DB_DIR.mkdir(parents=True, exist_ok=True)
+
+# Backwards-compat: if old DB_PATH env points to a single file keep it accessible
+DB_PATH = DB_DIR / "health.db"
+
+# ── Current-user context variable ────────────────────────────────────────────
+# Set by the FastAPI auth middleware for every request.
+# Background tasks must call _current_user.set(user_id) explicitly.
+_current_user: ContextVar[str] = ContextVar("current_user", default="ow")
 
 
-def get_conn() -> sqlite3.Connection:
-    conn = sqlite3.connect(DB_PATH)
+def get_db_path(user_id: str | None = None) -> Path:
+    uid = user_id or _current_user.get()
+    return DB_DIR / f"health_{uid}.db"
+
+
+def get_conn(user_id: str | None = None) -> sqlite3.Connection:
+    conn = sqlite3.connect(get_db_path(user_id))
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL")
     return conn
 
 
 @contextmanager
-def db():
-    conn = get_conn()
+def db(user_id: str | None = None):
+    conn = get_conn(user_id)
     try:
         yield conn
         conn.commit()
@@ -30,8 +44,8 @@ def db():
         conn.close()
 
 
-def init_db():
-    with db() as conn:
+def init_db(user_id: str | None = None):
+    with db(user_id) as conn:
         conn.executescript("""
         CREATE TABLE IF NOT EXISTS sleep (
             date TEXT PRIMARY KEY,

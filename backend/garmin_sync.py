@@ -6,18 +6,26 @@ from pathlib import Path
 from typing import Optional
 
 from garminconnect import Garmin
-from database import db, DB_PATH
+from database import db, DB_DIR, _current_user
 
 logger = logging.getLogger(__name__)
 
-_client: Optional[Garmin] = None
+# Per-user Garmin clients  {user_id: Garmin}
+_clients: dict[str, Optional[Garmin]] = {}
 
-# Store session token next to the database
-TOKEN_PATH = DB_PATH.parent / "garmin_tokens"
+
+def _token_path(user_id: str) -> Path:
+    p = DB_DIR / f"garmin_tokens_{user_id}"
+    p.mkdir(parents=True, exist_ok=True)
+    return p
+
+
+def _get_user() -> str:
+    return _current_user.get()
 
 
 def get_stored_credentials() -> Optional[tuple[str, str]]:
-    """Return (email, password) from DB, or fall back to env vars."""
+    """Return (email, password) from current user's DB, or fall back to env vars."""
     with db() as conn:
         row = conn.execute("SELECT garmin_email, garmin_password FROM credentials WHERE id=1").fetchone()
         if row:
@@ -30,35 +38,37 @@ def get_stored_credentials() -> Optional[tuple[str, str]]:
 
 
 def reset_client():
-    global _client
-    _client = None
+    user_id = _get_user()
+    _clients[user_id] = None
 
 
 def get_client() -> Garmin:
-    global _client
-    if _client is None:
+    user_id = _get_user()
+    if not _clients.get(user_id):
         creds = get_stored_credentials()
         if not creds:
             raise RuntimeError("No Garmin credentials configured.")
         email, password = creds
-        _client = Garmin(email, password)
+        client = Garmin(email, password)
+        tp = _token_path(user_id)
         try:
-            TOKEN_PATH.mkdir(parents=True, exist_ok=True)
-            _client.login(str(TOKEN_PATH))
-            logger.info("Garmin session resumed from token")
+            client.login(str(tp))
+            logger.info(f"[{user_id}] Garmin session resumed from token")
         except Exception:
-            logger.info("No saved session, doing full Garmin login")
-            _client.login()
-        logger.info("Garmin client ready")
-    return _client
+            logger.info(f"[{user_id}] No saved session, doing full Garmin login")
+            client.login()
+        logger.info(f"[{user_id}] Garmin client ready")
+        _clients[user_id] = client
+    return _clients[user_id]
 
 
 def test_credentials(email: str, password: str) -> Garmin:
     """Attempt a login with the given credentials, save session token. Returns client."""
-    TOKEN_PATH.mkdir(parents=True, exist_ok=True)
+    user_id = _get_user()
+    tp = _token_path(user_id)
     client = Garmin(email, password)
-    client.login(str(TOKEN_PATH))
-    logger.info("Garmin credentials verified and session saved")
+    client.login(str(tp))
+    logger.info(f"[{user_id}] Garmin credentials verified and session saved")
     return client
 
 
