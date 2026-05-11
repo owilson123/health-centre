@@ -20,9 +20,15 @@ def _hash(pw: str) -> str:
     return hashlib.sha256(pw.encode()).hexdigest()
 
 
+def _user_hash(env_key: str, fallback: str) -> str:
+    """Read password from env var (plain text), fall back to hardcoded default.
+    Set OW_PASSWORD and OB_PASSWORD on Railway to override."""
+    pw = os.environ.get(env_key)
+    return _hash(pw) if pw else _hash(fallback)
+
 USERS: dict[str, dict] = {
-    "ow": {"hash": _hash("ow123"), "display": "OW"},
-    "ob": {"hash": _hash("ob123"), "display": "OB"},
+    "ow": {"hash": _user_hash("OW_PASSWORD", "ow123"), "display": "OW"},
+    "ob": {"hash": _user_hash("OB_PASSWORD", "ob123"), "display": "OB"},
 }
 
 _bearer = HTTPBearer(auto_error=False)

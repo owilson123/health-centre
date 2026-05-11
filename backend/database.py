@@ -16,11 +16,13 @@ DB_PATH = DB_DIR / "health.db"
 # ── Current-user context variable ────────────────────────────────────────────
 # Set by the FastAPI auth middleware for every request.
 # Background tasks must call _current_user.set(user_id) explicitly.
-_current_user: ContextVar[str] = ContextVar("current_user", default="ow")
+_current_user: ContextVar[str] = ContextVar("current_user", default="__unset__")
 
 
 def get_db_path(user_id: str | None = None) -> Path:
     uid = user_id or _current_user.get()
+    if uid == "__unset__":
+        raise RuntimeError("No authenticated user set — request missing auth context")
     return DB_DIR / f"health_{uid}.db"
 
 
