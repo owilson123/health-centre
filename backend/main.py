@@ -203,15 +203,14 @@ def get_dashboard(user_id: str = Depends(get_current_user)):
 
     if strength_rows:
         total_strength_strain = sum(r["strength_strain"] for r in strength_rows)
-        garmin_activity_strain = strain.get("score", 0)
-        # Use the higher of the two, then add 30% of the other as supplemental load
-        if total_strength_strain > garmin_activity_strain:
-            blended = round(min(100, total_strength_strain + garmin_activity_strain * 0.3))
-        else:
-            blended = round(min(100, garmin_activity_strain + total_strength_strain * 0.3))
+        garmin_cardio_strain = strain.get("score", 0)
+        # Clean addition: Garmin strength-type activities are excluded from TRIMP in
+        # calc_strain_score, so there is no overlap — cardio strain + lifting strain are
+        # fully independent signals and can be summed directly.
+        combined = round(min(100, garmin_cardio_strain + total_strength_strain))
         strain = {
             **strain,
-            "score": blended,
+            "score": combined,
             "strength_strain": round(total_strength_strain, 1),
             "strength_sessions_today": len(strength_rows),
         }

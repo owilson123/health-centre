@@ -341,6 +341,13 @@ def calc_strain_score(target_date: date = None, recovery_score: int = 50) -> dic
         "running": 1.0, "cycling": 0.85, "swimming": 0.95,
         "strength_training": 0.9, "other": 0.9,
     }
+    # Garmin activity types where HR-based TRIMP is unreliable because rest periods
+    # dominate. We exclude these from the TRIMP calculation and let INOL (from the
+    # training tab) replace them entirely — avoiding double-counting.
+    STRENGTH_ACTIVITY_TYPES = {
+        "strength_training", "gym_and_fitness_equipment",
+        "functional_training", "crossfit", "weightlifting",
+    }
 
     with db() as conn:
         profile = _get_profile(conn)
@@ -361,7 +368,15 @@ def calc_strain_score(target_date: date = None, recovery_score: int = 50) -> dic
 
         for a in activities:
             act = dict(a)
-            mult = TYPE_MULTIPLIERS.get(act["type"], 0.9)
+            act_type = act.get("type", "") or ""
+
+            # Skip strength-type activities — TRIMP is unreliable for lifting
+            # because rest periods keep average HR artificially low.
+            # INOL (from the training tab) replaces these entirely.
+            if act_type in STRENGTH_ACTIVITY_TYPES:
+                continue
+
+            mult = TYPE_MULTIPLIERS.get(act_type, 0.9)
             zone_secs_total = sum((act.get(f"zone{z}_seconds", 0) or 0) for z in range(1, 6))
 
             if zone_secs_total > 0:
@@ -377,8 +392,6 @@ def calc_strain_score(target_date: date = None, recovery_score: int = 50) -> dic
                 if avg_hr > 0 and duration > 0:
                     hr_reserve = _clamp((avg_hr - rhr) / max(max_hr - rhr, 1), 0, 1)
                     trimp = (duration / 60) * hr_reserve * 0.64 * math.exp(1.92 * hr_reserve)
-                    # Calibrate: TRIMP ~100 for a moderate 60min run ≈ 50 strain
-                    # MAX_LOAD = 28800 units; TRIMP 100 → load ~14400 → 50 strain
                     total_load += trimp * 144 * mult
 
                     # Approximate zone distribution for display
