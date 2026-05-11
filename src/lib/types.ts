@@ -38,6 +38,8 @@ export interface RecoveryScore {
   }
   acwr: number
   acwr_label: string
+  acute_load: number
+  chronic_load: number
   target_strain: number
   insight: string
 }

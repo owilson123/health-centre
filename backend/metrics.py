@@ -246,7 +246,7 @@ def calc_recovery_score(target_date: date = None, sleep_score: Optional[int] = N
         score = round(sum(components[k] * w for k, w in weights.items()))
 
         # ACWR
-        acwr, acwr_label = _calc_acwr(conn, target_date)
+        acwr, acwr_label, acute_load, chronic_load = _calc_acwr(conn, target_date)
 
         # Apply ACWR penalty
         if acwr > 1.5:
@@ -264,6 +264,8 @@ def calc_recovery_score(target_date: date = None, sleep_score: Optional[int] = N
             "components": components,
             "acwr": round(acwr, 2),
             "acwr_label": acwr_label,
+            "acute_load": acute_load,
+            "chronic_load": chronic_load,
             "target_strain": target_strain,
             "insight": insight,
         }
@@ -299,7 +301,7 @@ def _calc_acwr(conn, target_date: date) -> tuple[float, str]:
     else:
         label = "On Track"
 
-    return acwr, label
+    return acwr, label, round(acute, 1), round(chronic, 1)
 
 
 def _recovery_to_target_strain(recovery: float) -> int:
