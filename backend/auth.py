@@ -50,9 +50,11 @@ def decode_token(token: str) -> str:
         raise HTTPException(status_code=401, detail="Invalid token")
 
 
-def get_current_user(
+async def get_current_user(
     credentials: Optional[HTTPAuthorizationCredentials] = Depends(_bearer),
 ) -> str:
+    """Async so it runs in the event loop context — ContextVar.set() then
+    propagates correctly when FastAPI dispatches sync endpoints to threads."""
     if not credentials:
         raise HTTPException(status_code=401, detail="Not authenticated")
     user_id = decode_token(credentials.credentials)
