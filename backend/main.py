@@ -187,10 +187,34 @@ def get_dashboard(user_id: str = Depends(get_current_user)):
     strain   = calc_strain_score(today, recovery_score=recovery["score"])
     calories = calc_calories(today)
 
+    # Supplement strain with today's strength training sessions.
+    # HR-based TRIMP underestimates lifting; INOL-based strength_strain corrects this.
+    # We take the max of (garmin activity strain, strength strain) and add any
+    # non-overlapping strength contribution on top of garmin background load.
     with db() as conn:
+        today_str = today.isoformat()
+        strength_rows = conn.execute("""
+            SELECT strength_strain FROM workout_sessions
+            WHERE DATE(started_at) = ? AND finished_at IS NOT NULL AND strength_strain > 0
+        """, (today_str,)).fetchall()
         last_sync_row = conn.execute(
             "SELECT synced_at FROM sync_log WHERE status='ok' ORDER BY synced_at DESC LIMIT 1"
         ).fetchone()
+
+    if strength_rows:
+        total_strength_strain = sum(r["strength_strain"] for r in strength_rows)
+        garmin_activity_strain = strain.get("score", 0)
+        # Use the higher of the two, then add 30% of the other as supplemental load
+        if total_strength_strain > garmin_activity_strain:
+            blended = round(min(100, total_strength_strain + garmin_activity_strain * 0.3))
+        else:
+            blended = round(min(100, garmin_activity_strain + total_strength_strain * 0.3))
+        strain = {
+            **strain,
+            "score": blended,
+            "strength_strain": round(total_strength_strain, 1),
+            "strength_sessions_today": len(strength_rows),
+        }
 
     return {
         "sleep": sleep,

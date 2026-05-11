@@ -143,6 +143,7 @@ export interface SessionSummary {
   total_sets: number
   total_volume_kg: number
   exercise_count: number
+  strength_strain: number
 }
 
 export interface SessionDetail {

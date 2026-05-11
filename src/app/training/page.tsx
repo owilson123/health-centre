@@ -5,7 +5,7 @@ import { motion, AnimatePresence } from 'framer-motion'
 import {
   Plus, X, ChevronRight, Dumbbell, Clock,
   Search, Check, ChevronDown, Trash2, Play, RotateCcw,
-  Trophy, Weight
+  Trophy, Weight, Flame, Zap
 } from 'lucide-react'
 import { api, WorkoutTemplate, TrainingExercise, SessionDetail, SessionSummary, LastPerformance } from '@/lib/api'
 
@@ -22,6 +22,13 @@ function fmtDuration(start: string, end?: string | null) {
   const mins = Math.round((e.getTime() - s.getTime()) / 60000)
   if (mins < 60) return `${mins}m`
   return `${Math.floor(mins / 60)}h ${mins % 60}m`
+}
+
+function strainColor(score: number): string {
+  if (score >= 70) return '#ef4444'   // red — high
+  if (score >= 50) return '#f59e0b'   // amber — moderate-high
+  if (score >= 30) return '#22c55e'   // green — moderate
+  return '#6366f1'                     // indigo — light
 }
 
 const CATEGORY_COLORS: Record<string, string> = {
@@ -465,6 +472,7 @@ function ActiveSession({
   const [showAddEx, setShowAddEx] = useState(session.exercises.length === 0)
   const [allExercises, setAllExercises] = useState<TrainingExercise[]>(session.exercises)
   const [finishing, setFinishing] = useState(false)
+  const [finishStrain, setFinishStrain] = useState<number | null>(null)
 
   // Load last performance + DUP recommendation for each exercise
   useEffect(() => {
@@ -538,8 +546,14 @@ function ActiveSession({
   const finish = async () => {
     setFinishing(true)
     try {
-      await api.training.finishSession(session.session_id)
-      onFinish()
+      const res = await api.training.finishSession(session.session_id) as { strength_strain?: number }
+      if (res?.strength_strain && res.strength_strain > 0) {
+        setFinishStrain(res.strength_strain)
+        // Show summary briefly then dismiss
+        setTimeout(() => { onFinish() }, 3000)
+      } else {
+        onFinish()
+      }
     } finally {
       setFinishing(false)
     }
@@ -728,6 +742,42 @@ function ActiveSession({
           </div>
         )}
       </AnimatePresence>
+
+      {/* Post-workout strain summary */}
+      <AnimatePresence>
+        {finishStrain !== null && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-50 flex items-center justify-center bg-black/80"
+          >
+            <motion.div
+              initial={{ scale: 0.85, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              transition={{ type: 'spring', damping: 20, stiffness: 300 }}
+              className="text-center px-8"
+            >
+              <div
+                className="w-24 h-24 rounded-full flex items-center justify-center mx-auto mb-4 border-4"
+                style={{ borderColor: strainColor(finishStrain), boxShadow: `0 0 32px ${strainColor(finishStrain)}55` }}
+              >
+                <Zap size={36} style={{ color: strainColor(finishStrain) }} />
+              </div>
+              <p className="text-4xl font-bold mb-1" style={{ color: strainColor(finishStrain) }}>
+                {finishStrain}
+              </p>
+              <p className="text-white/60 text-sm font-medium mb-1">Strength Strain</p>
+              <p className="text-white/30 text-xs">
+                {finishStrain >= 70 ? 'Heavy session — prioritise recovery'
+                  : finishStrain >= 50 ? 'Solid work — good training stimulus'
+                  : finishStrain >= 30 ? 'Moderate session — keep it consistent'
+                  : 'Light session — good for active recovery'}
+              </p>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </>
   )
 }
@@ -771,15 +821,17 @@ function SessionDetailSheet({ sid, onClose }: { sid: number; onClose: () => void
       </div>
 
       {/* Stats */}
-      <div className="grid grid-cols-3 gap-3 px-4 mb-4">
+      <div className="grid grid-cols-4 gap-2 px-4 mb-4">
         {[
-          { icon: Clock, label: 'Duration', value: fmtDuration(detail.started_at, detail.finished_at) },
-          { icon: Weight, label: 'Volume', value: `${Math.round(totalVolume).toLocaleString()} kg` },
-          { icon: Dumbbell, label: 'Exercises', value: detail.exercises.length },
-        ].map(({ icon: Icon, label, value }) => (
+          { icon: Clock,    label: 'Duration',  value: fmtDuration(detail.started_at, detail.finished_at), color: null },
+          { icon: Weight,   label: 'Volume',    value: `${Math.round(totalVolume).toLocaleString()} kg`, color: null },
+          { icon: Dumbbell, label: 'Exercises', value: detail.exercises.length, color: null },
+          { icon: Flame,    label: 'Strain',    value: (detail as SessionDetail & { strength_strain?: number }).strength_strain ? `${(detail as SessionDetail & { strength_strain?: number }).strength_strain}` : '—',
+            color: (detail as SessionDetail & { strength_strain?: number }).strength_strain ? strainColor((detail as SessionDetail & { strength_strain?: number }).strength_strain!) : null },
+        ].map(({ icon: Icon, label, value, color }) => (
           <div key={label} className="bg-white/5 rounded-2xl p-3 text-center">
-            <Icon size={14} className="mx-auto text-white/30 mb-1" />
-            <p className="text-base font-bold">{value}</p>
+            <Icon size={14} className="mx-auto mb-1" style={{ color: color ?? 'rgba(255,255,255,0.3)' }} />
+            <p className="text-sm font-bold" style={{ color: color ?? 'white' }}>{value}</p>
             <p className="text-[10px] text-white/30 mt-0.5">{label}</p>
           </div>
         ))}
@@ -1090,6 +1142,12 @@ export default function TrainingPage() {
                 {s.total_volume_kg > 0 && (
                   <div className="flex items-center gap-1.5 text-xs text-white/50">
                     <Weight size={11} />{s.total_volume_kg.toLocaleString()} kg
+                  </div>
+                )}
+                {s.strength_strain > 0 && (
+                  <div className="flex items-center gap-1.5 text-xs font-semibold"
+                       style={{ color: strainColor(s.strength_strain) }}>
+                    <Flame size={11} />{s.strength_strain} strain
                   </div>
                 )}
               </div>

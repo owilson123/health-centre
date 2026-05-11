@@ -39,11 +39,12 @@ def init_training_db(user_id: str | None = None):
         );
 
         CREATE TABLE IF NOT EXISTS workout_sessions (
-            id          INTEGER PRIMARY KEY AUTOINCREMENT,
-            template_id INTEGER REFERENCES workout_templates(id),
-            name        TEXT,
-            started_at  TEXT DEFAULT (datetime('now')),
-            finished_at TEXT
+            id              INTEGER PRIMARY KEY AUTOINCREMENT,
+            template_id     INTEGER REFERENCES workout_templates(id),
+            name            TEXT,
+            started_at      TEXT DEFAULT (datetime('now')),
+            finished_at     TEXT,
+            strength_strain REAL DEFAULT 0
         );
 
         CREATE TABLE IF NOT EXISTS workout_sets (
@@ -63,6 +64,11 @@ def init_training_db(user_id: str | None = None):
         );
         """)
         _seed_exercises(conn)
+        # Migrations for existing databases
+        try:
+            conn.execute("ALTER TABLE workout_sessions ADD COLUMN strength_strain REAL DEFAULT 0")
+        except Exception:
+            pass  # column already exists
 
 
 EXERCISES = [
@@ -495,6 +501,95 @@ def _dup_recommendation(conn, exercise_name: str, category: str) -> dict | None:
     }
 
 
+# ─── Strength strain (INOL-based) ────────────────────────────────────────────
+#
+# Problem with HR-based TRIMP for lifting: rest periods drop HR back down,
+# so a heavy 5×5 squat session looks like "light effort" to a heart-rate monitor.
+#
+# INOL (Intensity × Number of Lifts) fixes this:
+#   INOL per set = reps / (100 − intensity_%)
+# At 90% 1RM a set of 5 = 5/10 = 0.50 INOL.
+# At 70% 1RM a set of 10 = 10/30 = 0.33 INOL.
+# Same reps, higher intensity → higher INOL → correctly harder on CNS.
+#
+# Compound lifts (squat, deadlift, row, bench, etc.) apply a 1.35× multiplier
+# because they recruit far more total muscle mass and systemic fatigue than
+# isolation work.
+#
+# Scale: total INOL × 10 → strain 0–100.
+# Reference points (calibrated to an intermediate lifter):
+#   ~20  light isolation pump session (3 exercises, light weight)
+#   ~45  moderate push/pull day with compounds + accessories
+#   ~65  heavy 5×5 session (squat + bench or DL)
+#   ~80  high-volume full-body hypertrophy day
+#   ~90  competition-style max-effort day (near limit on multiple lifts)
+
+COMPOUND_LIFTS_STRAIN = {
+    "Squat", "Front Squat", "Deadlift", "Romanian Deadlift", "Hip Thrust",
+    "Good Morning", "Barbell Row", "T-Bar Row", "Dumbbell Row",
+    "Barbell Bench Press", "Incline Barbell Bench Press", "Close-Grip Bench Press",
+    "Overhead Press", "Push Press", "Lat Pulldown",
+}
+
+
+def _set_inol(weight_kg: float | None, reps: int, one_rm: float | None,
+              is_compound: bool) -> float:
+    compound_mult = 1.35 if is_compound else 1.0
+
+    if weight_kg and weight_kg > 0 and one_rm and one_rm > 0:
+        intensity = min(weight_kg / one_rm, 0.99)
+        pct = intensity * 100
+        # Denominator capped at 2 so ≥98% 1RM doesn't blow up
+        inol = reps / max(100.0 - pct, 2.0)
+    elif weight_kg and weight_kg > 0:
+        # No 1RM known — assume moderate intensity (~50% 1RM)
+        inol = reps / 50.0
+    else:
+        # Bodyweight exercise
+        inol = reps / 80.0
+
+    return inol * compound_mult
+
+
+def calc_strength_strain(conn, session_id: int) -> float:
+    """
+    Return INOL-based strain score (0–100) for a finished strength session.
+    Uses the best Epley 1RM from the session's own sets for each exercise,
+    so it requires no pre-set user maxes — it self-calibrates from the data.
+    """
+    rows = conn.execute("""
+        SELECT ws.exercise_id, ws.weight_kg, ws.reps, e.name AS exercise_name
+        FROM workout_sets ws
+        JOIN exercises e ON e.id = ws.exercise_id
+        WHERE ws.session_id = ? AND ws.reps > 0
+        ORDER BY ws.exercise_id, ws.set_number
+    """, (session_id,)).fetchall()
+
+    if not rows:
+        return 0.0
+
+    # Group by exercise, compute 1RM from best set within this session
+    by_ex: dict[int, list] = {}
+    names: dict[int, str]  = {}
+    for r in rows:
+        by_ex.setdefault(r["exercise_id"], []).append(r)
+        names[r["exercise_id"]] = r["exercise_name"]
+
+    total_inol = 0.0
+    for ex_id, sets in by_ex.items():
+        name        = names[ex_id]
+        is_compound = name in COMPOUND_LIFTS_STRAIN
+
+        weighted = [s for s in sets if s["weight_kg"] and s["weight_kg"] > 0]
+        one_rm   = (max(_epley_1rm(s["weight_kg"], s["reps"]) for s in weighted)
+                    if weighted else None)
+
+        for s in sets:
+            total_inol += _set_inol(s["weight_kg"], s["reps"], one_rm, is_compound)
+
+    return round(min(95.0, total_inol * 10), 1)
+
+
 # ─── Helpers ─────────────────────────────────────────────────────────────────
 
 def _fmt_performance(sets: list) -> str | None:
@@ -656,7 +751,7 @@ def start_session(body: SessionStart, _uid: str = Depends(get_current_user)):
 def list_sessions(limit: int = 20, _uid: str = Depends(get_current_user)):
     with db() as conn:
         sessions = conn.execute("""
-            SELECT id, name, template_id, started_at, finished_at
+            SELECT id, name, template_id, started_at, finished_at, strength_strain
             FROM workout_sessions
             WHERE finished_at IS NOT NULL
             ORDER BY started_at DESC LIMIT ?
@@ -675,6 +770,7 @@ def list_sessions(limit: int = 20, _uid: str = Depends(get_current_user)):
                 "total_sets": total_sets,
                 "total_volume_kg": round(total_volume),
                 "exercise_count": ex_count,
+                "strength_strain": s["strength_strain"] or 0,
             })
     return result
 
@@ -719,10 +815,12 @@ def get_session(sid: int, _uid: str = Depends(get_current_user)):
 @router.patch("/sessions/{sid}/finish")
 def finish_session(sid: int, _uid: str = Depends(get_current_user)):
     with db() as conn:
+        strain = calc_strength_strain(conn, sid)
         conn.execute(
-            "UPDATE workout_sessions SET finished_at=datetime('now') WHERE id=?", (sid,)
+            "UPDATE workout_sessions SET finished_at=datetime('now'), strength_strain=? WHERE id=?",
+            (strain, sid)
         )
-    return {"status": "finished"}
+    return {"status": "finished", "strength_strain": strain}
 
 
 @router.post("/sessions/{sid}/sets", status_code=201)
