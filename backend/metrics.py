@@ -271,23 +271,48 @@ def calc_recovery_score(target_date: date = None, sleep_score: Optional[int] = N
         }
 
 
-def _calc_acwr(conn, target_date: date) -> tuple[float, str]:
-    # Acute = sum of strain last 7 days
-    acute_start = (target_date - timedelta(days=7)).isoformat()
-    acute_rows = conn.execute(
-        "SELECT SUM(strain) FROM activities WHERE date > ? AND date <= ?",
-        (acute_start, target_date.isoformat())
-    ).fetchone()
-    acute = (acute_rows[0] or 0)
+def _calc_acwr(conn, target_date: date) -> tuple[float, str, float, float]:
+    # Exclude Garmin strength activities — strain=0 is written to them so this
+    # WHERE clause is belt-and-braces, but also future-proof.
+    _ST = ("strength_training", "gym_and_fitness_equipment",
+           "functional_training", "crossfit", "weightlifting")
+    _ph = ",".join("?" * len(_ST))
 
-    # Chronic = avg weekly strain over 28 days
+    acute_start   = (target_date - timedelta(days=7)).isoformat()
     chronic_start = (target_date - timedelta(days=28)).isoformat()
-    chronic_rows = conn.execute(
-        "SELECT SUM(strain) FROM activities WHERE date > ? AND date <= ?",
-        (chronic_start, target_date.isoformat())
-    ).fetchone()
-    chronic_total = (chronic_rows[0] or 0)
-    chronic = chronic_total / 4
+    today         = target_date.isoformat()
+
+    # ── Cardio strain (Garmin TRIMP, strength types excluded) ──────────
+    acute_cardio = (conn.execute(
+        f"SELECT COALESCE(SUM(strain),0) FROM activities "
+        f"WHERE date > ? AND date <= ? AND type NOT IN ({_ph})",
+        (acute_start, today, *_ST)
+    ).fetchone()[0])
+
+    chronic_cardio = (conn.execute(
+        f"SELECT COALESCE(SUM(strain),0) FROM activities "
+        f"WHERE date > ? AND date <= ? AND type NOT IN ({_ph})",
+        (chronic_start, today, *_ST)
+    ).fetchone()[0])
+
+    # ── Strength strain (INOL from training tab) ────────────────────────
+    try:
+        acute_strength = (conn.execute(
+            "SELECT COALESCE(SUM(strength_strain),0) FROM workout_sessions "
+            "WHERE DATE(started_at) > ? AND DATE(started_at) <= ? AND finished_at IS NOT NULL",
+            (acute_start, today)
+        ).fetchone()[0])
+        chronic_strength = (conn.execute(
+            "SELECT COALESCE(SUM(strength_strain),0) FROM workout_sessions "
+            "WHERE DATE(started_at) > ? AND DATE(started_at) <= ? AND finished_at IS NOT NULL",
+            (chronic_start, today)
+        ).fetchone()[0])
+    except Exception:
+        acute_strength = chronic_strength = 0
+
+    acute         = acute_cardio + acute_strength
+    chronic_total = chronic_cardio + chronic_strength
+    chronic       = chronic_total / 4
 
     if chronic < 1:
         acwr = 1.0
@@ -479,7 +504,15 @@ def calc_strain_score(target_date: date = None, recovery_score: int = 50) -> dic
         # ── Per-activity strain write-back ──────────────────────────────
         for a in activities:
             act = dict(a)
-            mult = TYPE_MULTIPLIERS.get(act["type"], 0.9)
+            act_type = act.get("type", "") or ""
+
+            # Strength activities are excluded from TRIMP — write 0 so they
+            # don't contaminate ACWR queries that sum activities.strain.
+            if act_type in STRENGTH_ACTIVITY_TYPES:
+                conn.execute("UPDATE activities SET strain=0 WHERE id=?", (act["id"],))
+                continue
+
+            mult = TYPE_MULTIPLIERS.get(act_type, 0.9)
             zone_secs_total = sum((act.get(f"zone{z}_seconds", 0) or 0) for z in range(1, 6))
             if zone_secs_total > 0:
                 act_load = sum(
