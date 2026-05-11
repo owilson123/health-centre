@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useEffect, useCallback } from 'react'
-import { motion, AnimatePresence } from 'framer-motion'
+import { motion, AnimatePresence, useMotionValue, useTransform } from 'framer-motion'
 import {
   Plus, X, ChevronRight, Dumbbell, Clock,
   Search, Check, ChevronDown, Trash2, Play, RotateCcw,
@@ -470,6 +470,87 @@ interface ActiveSet {
   set_id?: number
 }
 
+// Swipeable set row — drag left to reveal delete, release past threshold to delete
+function SwipeableSetRow({
+  s, idx, kgLabel, onUpdate, onSave, onDelete,
+}: {
+  s: ActiveSet
+  idx: number
+  kgLabel: string
+  onUpdate: (field: 'weight_kg' | 'reps', val: string) => void
+  onSave: () => void
+  onDelete: () => void
+}) {
+  const x = useMotionValue(0)
+  const deleteOpacity = useTransform(x, [-72, -16], [1, 0])
+  const rowScale = useTransform(x, [-72, 0], [0.97, 1])
+
+  return (
+    <div className="relative rounded-xl overflow-hidden" style={{ isolation: 'isolate' }}>
+      {/* Red delete layer behind the row */}
+      <motion.div
+        className="absolute inset-0 bg-red-500 flex items-center justify-end pr-4 rounded-xl"
+        style={{ opacity: deleteOpacity }}
+      >
+        <Trash2 size={15} className="text-white" />
+      </motion.div>
+
+      <motion.div
+        drag="x"
+        dragConstraints={{ left: -72, right: 0 }}
+        dragElastic={{ left: 0.08, right: 0 }}
+        dragMomentum={false}
+        onDragEnd={(_, info) => { if (info.offset.x < -52) onDelete() }}
+        style={{ x, scale: rowScale }}
+        className={`relative flex items-center gap-2 rounded-xl px-2.5 py-2.5 ${
+          s.saved ? 'bg-green-500/12 border border-green-500/20' : 'bg-white/6'
+        }`}
+      >
+        <span className="w-7 text-xs text-white/30 text-center font-medium flex-shrink-0">
+          {s.set_number}
+        </span>
+        <input
+          type="text"
+          inputMode="decimal"
+          value={s.weight_kg}
+          onChange={e => onUpdate('weight_kg', e.target.value)}
+          placeholder="—"
+          readOnly={s.saved}
+          className={`flex-1 rounded-lg px-2 py-1.5 text-sm text-white text-center outline-none min-w-0 ${
+            s.saved ? 'bg-transparent text-white/55' : 'bg-white/8 focus:bg-white/12'
+          }`}
+        />
+        <span className="text-[10px] text-white/20 flex-shrink-0">{kgLabel}</span>
+        <input
+          type="text"
+          inputMode="numeric"
+          value={s.reps}
+          onChange={e => onUpdate('reps', e.target.value)}
+          placeholder="0"
+          readOnly={s.saved}
+          className={`w-14 rounded-lg px-2 py-1.5 text-sm text-white text-center outline-none flex-shrink-0 ${
+            s.saved ? 'bg-transparent text-white/55' : 'bg-white/8 focus:bg-white/12'
+          }`}
+        />
+        <div className="w-9 flex justify-center flex-shrink-0">
+          {s.saved ? (
+            <Check size={14} className="text-green-400" />
+          ) : (
+            <button
+              onPointerDown={e => e.stopPropagation()}
+              onClick={onSave}
+              disabled={!s.reps}
+              className="w-9 h-9 flex items-center justify-center text-white/30 active:text-green-400 disabled:opacity-20"
+            >
+              <Check size={16} />
+            </button>
+          )}
+        </div>
+      </motion.div>
+    </div>
+  )
+}
+
 function ActiveSession({
   session,
   onFinish,
@@ -479,17 +560,15 @@ function ActiveSession({
 }) {
   const [sets, setSets] = useState<Record<number, ActiveSet[]>>({})
   const [perf, setPerf] = useState<Record<number, LastPerformance>>({})
-  const [openEx, setOpenEx] = useState<number | null>(session.exercises[0]?.id ?? null)
-  // Open picker immediately if session started with no exercises (empty workout)
+  const [activeExIdx, setActiveExIdx] = useState(0)
   const [showAddEx, setShowAddEx] = useState(session.exercises.length === 0)
   const [allExercises, setAllExercises] = useState<TrainingExercise[]>(session.exercises)
   const [finishing, setFinishing] = useState(false)
   const [finishStrain, setFinishStrain] = useState<number | null>(null)
 
-  // Load last performance + DUP recommendation for each exercise
   useEffect(() => {
     allExercises.forEach(ex => {
-      if (perf[ex.id]) return   // already loaded
+      if (perf[ex.id]) return
       api.training.lastPerformance(ex.id).then(p => {
         setPerf(prev => ({ ...prev, [ex.id]: p }))
       }).catch(() => {})
@@ -497,35 +576,42 @@ function ActiveSession({
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [allExercises])
 
-  const getExSets = (exId: number): ActiveSet[] => sets[exId] ?? []
+  const activeEx = allExercises[activeExIdx] ?? null
+  const exSets: ActiveSet[] = activeEx ? (sets[activeEx.id] ?? []) : []
+  const lastP = activeEx ? perf[activeEx.id] : null
+  const rec = lastP?.recommendation ?? null
 
-  const addSet = (exId: number) => {
+  const addSet = () => {
+    if (!activeEx) return
+    const exId = activeEx.id
     setSets(prev => {
       const cur = prev[exId] ?? []
       const last = cur[cur.length - 1]
-      // Pre-fill with DUP recommendation if no previous sets yet
-      const rec = perf[exId]?.recommendation
+      const r = perf[exId]?.recommendation
       return {
         ...prev,
         [exId]: [...cur, {
           set_number: cur.length + 1,
-          weight_kg: last?.weight_kg ?? (rec?.weight_kg ? String(rec.weight_kg) : ''),
-          reps: last?.reps ?? (rec ? String(rec.reps_high) : ''),
+          weight_kg: last?.weight_kg ?? (r?.weight_kg ? String(r.weight_kg) : ''),
+          reps: last?.reps ?? (r ? String(r.reps_high) : ''),
           saved: false,
         }],
       }
     })
   }
 
-  const updateSet = (exId: number, idx: number, field: 'weight_kg' | 'reps', val: string) => {
+  const updateSet = (idx: number, field: 'weight_kg' | 'reps', val: string) => {
+    if (!activeEx) return
     setSets(prev => {
-      const cur = [...(prev[exId] ?? [])]
+      const cur = [...(prev[activeEx.id] ?? [])]
       cur[idx] = { ...cur[idx], [field]: val }
-      return { ...prev, [exId]: cur }
+      return { ...prev, [activeEx.id]: cur }
     })
   }
 
-  const saveSet = async (exId: number, idx: number) => {
+  const saveSet = async (idx: number) => {
+    if (!activeEx) return
+    const exId = activeEx.id
     const s = (sets[exId] ?? [])[idx]
     if (!s || !s.reps) return
     try {
@@ -543,7 +629,9 @@ function ActiveSession({
     } catch {}
   }
 
-  const deleteSet = async (exId: number, idx: number) => {
+  const deleteSet = async (idx: number) => {
+    if (!activeEx) return
+    const exId = activeEx.id
     const s = (sets[exId] ?? [])[idx]
     if (s?.set_id) {
       try { await api.training.deleteSet(s.set_id) } catch {}
@@ -561,7 +649,6 @@ function ActiveSession({
       const res = await api.training.finishSession(session.session_id) as { strength_strain?: number }
       if (res?.strength_strain && res.strength_strain > 0) {
         setFinishStrain(res.strength_strain)
-        // Show summary briefly then dismiss
         setTimeout(() => { onFinish() }, 3000)
       } else {
         onFinish()
@@ -571,6 +658,8 @@ function ActiveSession({
     }
   }
 
+  const kgLabel = activeEx?.equipment === 'Dumbbell' ? 'ea' : 'kg'
+
   return (
     <>
       <motion.div
@@ -579,163 +668,131 @@ function ActiveSession({
         exit={{ y: '100%' }}
         transition={{ type: 'spring', damping: 28, stiffness: 300 }}
         className="fixed inset-0 z-40 flex flex-col bg-[#0a0a0a]"
+        style={{ paddingTop: 'env(safe-area-inset-top)', paddingBottom: 'env(safe-area-inset-bottom)' }}
       >
-        {/* Header */}
-        <div className="flex items-center gap-3 px-4 pt-6 pb-2 border-b border-white/8">
-          <div className="flex-1">
-            <h2 className="text-base font-semibold text-white">{session.name}</h2>
-            <p className="text-xs text-white/40 mt-0.5">In progress</p>
+        {/* ── Header ── */}
+        <div className="flex items-center gap-3 px-4 py-3 border-b border-white/8 flex-shrink-0">
+          <div className="flex-1 min-w-0">
+            <p className="text-sm font-semibold text-white truncate">{session.name}</p>
+            <p className="text-[11px] text-white/35">In progress</p>
           </div>
           <button
             onClick={finish}
             disabled={finishing}
-            className="px-4 py-2 bg-green-500 rounded-xl text-sm font-semibold text-black active:scale-95 disabled:opacity-60"
+            className="px-5 py-2 bg-green-500 rounded-xl text-sm font-bold text-black active:scale-95 disabled:opacity-60 flex-shrink-0"
           >
             {finishing ? '…' : 'Finish'}
           </button>
         </div>
 
-        {/* Exercise list */}
-        <div className="flex-1 overflow-y-auto pb-32">
-          {allExercises.length === 0 && (
-            <div className="flex flex-col items-center justify-center py-20 text-white/30">
-              <Dumbbell size={32} className="mb-3 opacity-30" />
-              <p className="text-sm">No exercises yet</p>
-              <button
-                onClick={() => setShowAddEx(true)}
-                className="mt-4 px-5 py-2.5 bg-indigo-500 rounded-xl text-sm font-semibold text-white"
-              >
-                Add Exercise
-              </button>
-            </div>
-          )}
-
-          {allExercises.map(ex => {
-            const exSets = getExSets(ex.id)
-            const lastP = perf[ex.id]
-            const rec = lastP?.recommendation ?? null
-            const isOpen = openEx === ex.id
-            const savedCount = exSets.filter(s => s.saved).length
-
+        {/* ── Exercise tab bar ── */}
+        <div className="flex border-b border-white/8 overflow-x-auto no-scrollbar flex-shrink-0">
+          {allExercises.map((ex, i) => {
+            const savedCount = (sets[ex.id] ?? []).filter(s => s.saved).length
+            const isActive = i === activeExIdx
+            // Shorten long names: first 2 words
+            const shortName = ex.name.split(' ').slice(0, 2).join(' ')
             return (
-              <div key={ex.id} className="border-b border-white/5">
-                <button
-                  onClick={() => setOpenEx(isOpen ? null : ex.id)}
-                  className="w-full flex items-center gap-3 px-4 py-3.5"
-                >
-                  <div className="flex-1 text-left">
-                    <p className="text-sm font-semibold text-white">{ex.name}</p>
-                    {lastP?.summary ? (
-                      <p className="text-xs text-white/35 mt-0.5">Last: {lastP.summary}</p>
-                    ) : rec ? (
-                      <p className={`text-xs mt-0.5 ${PHASE_STYLE[rec.phase]?.text ?? 'text-white/40'}`}>
-                        {rec.phase} · {rec.sets}×{rec.reps_low}{rec.reps_low !== rec.reps_high ? `–${rec.reps_high}` : ''}
-                        {rec.weight_kg ? ` @ ${rec.weight_kg}kg` : ''}
-                      </p>
-                    ) : null}
-                  </div>
-                  {savedCount > 0 && (
-                    <span className="text-xs text-green-400 font-medium">{savedCount} sets</span>
-                  )}
-                  <ChevronDown size={15} className={`text-white/30 transition-transform ${isOpen ? 'rotate-180' : ''}`} />
-                </button>
-
-                {isOpen && (
-                  <div className="px-4 pb-4 space-y-3">
-
-                    {/* DUP recommendation card */}
-                    {rec && <DupBadge rec={rec} />}
-
-                    {/* Last performance */}
-                    {lastP?.sets && lastP.sets.length > 0 && (
-                      <div className="p-2.5 bg-white/4 rounded-xl">
-                        <p className="text-[10px] text-white/30 uppercase tracking-widest mb-1.5">
-                          Last session · {lastP.session_date}
-                        </p>
-                        <div className="flex flex-wrap gap-1.5">
-                          {lastP.sets.map((s, i) => (
-                            <span key={i} className="text-xs text-white/60 bg-white/6 px-2 py-0.5 rounded-lg">
-                              {s.weight_kg ? `${s.weight_kg}kg` : 'BW'} × {s.reps}
-                            </span>
-                          ))}
-                        </div>
-                      </div>
-                    )}
-
-                    {/* Sets */}
-                    {exSets.length > 0 && (
-                      <div className="space-y-2">
-                        <div className="flex gap-2 px-1">
-                          <span className="w-6 text-[10px] text-white/20 text-center">SET</span>
-                          <span className="flex-1 text-[10px] text-white/20 text-center">
-                            {ex.equipment === 'Dumbbell' ? 'KG / HAND' : 'KG'}
-                          </span>
-                          <span className="flex-1 text-[10px] text-white/20 text-center">REPS</span>
-                          <span className="w-10" />
-                        </div>
-                        {exSets.map((s, i) => (
-                          <div key={i} className={`flex items-center gap-2 rounded-xl p-2 transition-colors ${s.saved ? 'bg-green-500/10' : 'bg-white/5'}`}>
-                            <span className="w-6 text-xs text-white/30 text-center">{s.set_number}</span>
-                            <input
-                              type="number"
-                              inputMode="decimal"
-                              value={s.weight_kg}
-                              onChange={e => updateSet(ex.id, i, 'weight_kg', e.target.value)}
-                              placeholder="—"
-                              disabled={s.saved}
-                              className="flex-1 bg-white/5 rounded-lg px-2 py-1.5 text-sm text-white text-center outline-none disabled:opacity-50"
-                            />
-                            <input
-                              type="number"
-                              inputMode="numeric"
-                              value={s.reps}
-                              onChange={e => updateSet(ex.id, i, 'reps', e.target.value)}
-                              placeholder="0"
-                              disabled={s.saved}
-                              className="flex-1 bg-white/5 rounded-lg px-2 py-1.5 text-sm text-white text-center outline-none disabled:opacity-50"
-                            />
-                            {s.saved ? (
-                              <button onClick={() => deleteSet(ex.id, i)} className="w-10 flex justify-center text-white/20 active:text-red-400">
-                                <X size={14} />
-                              </button>
-                            ) : (
-                              <button
-                                onClick={() => saveSet(ex.id, i)}
-                                disabled={!s.reps}
-                                className="w-10 flex justify-center text-white/30 active:text-green-400 disabled:opacity-20"
-                              >
-                                <Check size={16} />
-                              </button>
-                            )}
-                          </div>
-                        ))}
-                      </div>
-                    )}
-
-                    <button
-                      onClick={() => addSet(ex.id)}
-                      className="w-full py-2.5 border border-dashed border-white/10 rounded-xl text-sm text-white/40 active:bg-white/5 flex items-center justify-center gap-1.5"
-                    >
-                      <Plus size={14} />
-                      Add set
-                    </button>
-                  </div>
+              <button
+                key={ex.id}
+                onClick={() => setActiveExIdx(i)}
+                className={`relative flex-shrink-0 px-4 py-3 text-xs font-medium transition-colors ${
+                  isActive ? 'text-white' : 'text-white/35 active:text-white/60'
+                }`}
+              >
+                {shortName}
+                {savedCount > 0 && (
+                  <span className="ml-1.5 inline-flex items-center justify-center w-4 h-4 bg-green-500 rounded-full text-[9px] text-black font-bold">
+                    {savedCount}
+                  </span>
                 )}
-              </div>
+                {isActive && (
+                  <span className="absolute bottom-0 left-3 right-3 h-[2px] bg-indigo-500 rounded-full" />
+                )}
+              </button>
             )
           })}
+          {/* Add exercise tab */}
+          <button
+            onClick={() => setShowAddEx(true)}
+            className="flex-shrink-0 px-4 py-3 text-white/30 active:text-white/60"
+          >
+            <Plus size={15} />
+          </button>
+        </div>
 
-          {/* Add exercise button */}
-          {allExercises.length > 0 && (
+        {/* ── Main content area ── */}
+        {activeEx ? (
+          <div className="flex flex-col flex-1 min-h-0">
+
+            {/* Compact info bar: DUP + last perf */}
+            {(rec || lastP?.summary) && (
+              <div className="flex items-center gap-3 px-4 py-2.5 border-b border-white/5 flex-shrink-0">
+                {rec && (
+                  <div className={`flex items-center gap-2 flex-1 min-w-0 ${PHASE_STYLE[rec.phase]?.text ?? 'text-white/40'}`}>
+                    <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${PHASE_STYLE[rec.phase]?.dot ?? 'bg-white/30'}`} />
+                    <span className="text-[11px] font-semibold uppercase tracking-wide">{rec.phase}</span>
+                    <span className="text-[11px] text-white/50">
+                      {rec.sets}×{rec.reps_low}{rec.reps_low !== rec.reps_high ? `–${rec.reps_high}` : ''}
+                      {rec.weight_kg ? ` @ ${rec.weight_kg}kg` : ''}
+                    </span>
+                  </div>
+                )}
+                {lastP?.summary && (
+                  <span className="text-[11px] text-white/30 truncate flex-shrink-0">
+                    Last: {lastP.summary}
+                  </span>
+                )}
+              </div>
+            )}
+
+            {/* Column headers */}
+            <div className="flex items-center gap-2 px-4 pt-3 pb-1.5 flex-shrink-0">
+              <span className="w-7 text-[10px] text-white/20 text-center flex-shrink-0">SET</span>
+              <span className="flex-1 text-[10px] text-white/20 text-center">WEIGHT</span>
+              <span className="w-5 flex-shrink-0" />
+              <span className="w-14 text-[10px] text-white/20 text-center flex-shrink-0">REPS</span>
+              <span className="w-9 flex-shrink-0" />
+            </div>
+
+            {/* Set rows — scrollable if needed, but sized to fit screen */}
+            <div className="flex-1 overflow-y-auto px-4 pb-2 space-y-1.5">
+              {exSets.map((s, i) => (
+                <SwipeableSetRow
+                  key={`${activeEx.id}-${i}`}
+                  s={s}
+                  idx={i}
+                  kgLabel={kgLabel}
+                  onUpdate={(field, val) => updateSet(i, field, val)}
+                  onSave={() => saveSet(i)}
+                  onDelete={() => deleteSet(i)}
+                />
+              ))}
+            </div>
+
+            {/* Add set — pinned above bottom */}
+            <div className="px-4 pb-3 pt-2 flex-shrink-0">
+              <button
+                onClick={addSet}
+                className="w-full py-3 border border-dashed border-white/12 rounded-xl text-sm text-white/35 active:bg-white/5 flex items-center justify-center gap-1.5"
+              >
+                <Plus size={14} />
+                Add set
+              </button>
+            </div>
+          </div>
+        ) : (
+          <div className="flex-1 flex flex-col items-center justify-center text-white/30">
+            <Dumbbell size={32} className="mb-3 opacity-30" />
+            <p className="text-sm mb-4">No exercises yet</p>
             <button
               onClick={() => setShowAddEx(true)}
-              className="w-full flex items-center justify-center gap-2 px-4 py-4 text-white/30 text-sm active:bg-white/5"
+              className="px-5 py-2.5 bg-indigo-500 rounded-xl text-sm font-semibold text-white"
             >
-              <Plus size={15} />
-              Add exercise
+              Add Exercise
             </button>
-          )}
-        </div>
+          </div>
+        )}
       </motion.div>
 
       <AnimatePresence>
@@ -745,8 +802,9 @@ function ActiveSession({
               onClose={() => setShowAddEx(false)}
               onSelect={([ex]) => {
                 if (ex && !allExercises.find(e => e.id === ex.id)) {
+                  const newIdx = allExercises.length
                   setAllExercises(prev => [...prev, ex])
-                  setOpenEx(ex.id)
+                  setActiveExIdx(newIdx)
                 }
                 setShowAddEx(false)
               }}
