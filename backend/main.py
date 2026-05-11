@@ -93,7 +93,17 @@ def connect_garmin(
     import garmin_sync
     garmin_sync._clients[user_id] = verified_client
 
+    # Wipe all previously synced health data before saving new credentials.
+    # This guarantees the user only ever sees data from the account they just
+    # connected — no stale data from a previous account or from a credential leak.
+    _HEALTH_TABLES = ["sleep", "hrv", "body_battery", "stress", "steps",
+                      "activities", "user_profile", "sync_log"]
     with db() as conn:
+        for t in _HEALTH_TABLES:
+            try:
+                conn.execute(f"DELETE FROM {t}")
+            except Exception:
+                pass
         conn.execute("""
             INSERT INTO credentials (id, garmin_email, garmin_password, connected_at)
             VALUES (1, ?, ?, datetime('now'))
@@ -102,6 +112,7 @@ def connect_garmin(
                 garmin_password=excluded.garmin_password,
                 connected_at=excluded.connected_at
         """, (creds.email, creds.password))
+    logger.info(f"[{user_id}] Health data wiped before connecting {creds.email}")
 
     reset_client()
     background_tasks.add_task(_do_sync, user_id)
