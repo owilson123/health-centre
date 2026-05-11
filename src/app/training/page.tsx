@@ -1,11 +1,11 @@
 'use client'
 
 import React, { useState, useEffect, useCallback, useRef } from 'react'
-import { motion, AnimatePresence, useMotionValue, useTransform } from 'framer-motion'
+import { motion, AnimatePresence, useMotionValue, useTransform, Reorder, useDragControls } from 'framer-motion'
 import {
   Plus, X, ChevronRight, Dumbbell, Clock,
   Search, Check, ChevronDown, Trash2, Play, RotateCcw,
-  Trophy, Weight, Flame, Zap
+  Trophy, Weight, Flame, Zap, GripVertical
 } from 'lucide-react'
 import { api, WorkoutTemplate, TrainingExercise, SessionDetail, SessionSummary, LastPerformance } from '@/lib/api'
 
@@ -553,6 +553,108 @@ interface ActiveSet {
   set_id?: number
 }
 
+// One exercise card inside the reorderable list
+function ExerciseCard({
+  ex, exSets, kgLabel, rec, lastP,
+  onAddSet, onUpdate, onSave, onDelete, onRemove,
+}: {
+  ex: TrainingExercise
+  exSets: ActiveSet[]
+  kgLabel: string
+  rec: LastPerformance['recommendation'] | null
+  lastP: LastPerformance | null
+  onAddSet: () => void
+  onUpdate: (idx: number, field: 'weight_kg' | 'reps', val: string) => void
+  onSave: (idx: number) => void
+  onDelete: (idx: number) => void
+  onRemove: () => void
+}) {
+  const dragControls = useDragControls()
+
+  return (
+    <Reorder.Item
+      value={ex}
+      dragListener={false}
+      dragControls={dragControls}
+      as="div"
+      className="bg-white/5 rounded-2xl border border-white/8 overflow-hidden"
+      style={{ listStyle: 'none' }}
+    >
+      {/* Exercise header row */}
+      <div className="flex items-center gap-2 px-3 py-3 border-b border-white/5">
+        <button
+          onPointerDown={e => { e.preventDefault(); dragControls.start(e) }}
+          className="p-1 text-white/20 active:text-white/50 touch-none cursor-grab"
+        >
+          <GripVertical size={16} />
+        </button>
+        <p className="flex-1 text-sm font-semibold text-white">{ex.name}</p>
+        <button
+          onPointerDown={e => e.stopPropagation()}
+          onClick={onRemove}
+          className="p-1.5 text-white/20 active:text-red-400 transition-colors"
+        >
+          <X size={14} />
+        </button>
+      </div>
+
+      {/* DUP recommendation + last performance */}
+      {(rec || lastP?.summary) && (
+        <div className="flex items-center gap-3 px-3 py-2 border-b border-white/5">
+          {rec && (
+            <div className={`flex items-center gap-1.5 flex-1 min-w-0 ${PHASE_STYLE[rec.phase]?.text ?? 'text-white/40'}`}>
+              <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${PHASE_STYLE[rec.phase]?.dot ?? 'bg-white/30'}`} />
+              <span className="text-[11px] font-semibold uppercase tracking-wide">{rec.phase}</span>
+              <span className="text-[11px] text-white/50">
+                {rec.sets}×{rec.reps_low}{rec.reps_low !== rec.reps_high ? `–${rec.reps_high}` : ''}
+                {rec.weight_kg ? ` @ ${rec.weight_kg}kg` : ''}
+              </span>
+            </div>
+          )}
+          {lastP?.summary && (
+            <span className="text-[11px] text-white/30 truncate flex-shrink-0">Last: {lastP.summary}</span>
+          )}
+        </div>
+      )}
+
+      <div className="px-3 pt-2 pb-3">
+        {/* Column headers */}
+        <div className="flex items-center gap-2 pb-1.5">
+          <span className="w-7 text-[10px] text-white/20 text-center flex-shrink-0">SET</span>
+          <span className="flex-1 text-[10px] text-white/20 text-center">WEIGHT</span>
+          <span className="w-5 flex-shrink-0" />
+          <span className="w-14 text-[10px] text-white/20 text-center flex-shrink-0">REPS</span>
+          <span className="w-9 flex-shrink-0" />
+        </div>
+
+        {/* Set rows */}
+        <div className="space-y-1.5">
+          {exSets.map((s, i) => (
+            <SwipeableSetRow
+              key={`${ex.id}-${i}`}
+              s={s}
+              kgLabel={kgLabel}
+              onUpdate={(field, val) => onUpdate(i, field, val)}
+              onSave={() => onSave(i)}
+              onDelete={() => onDelete(i)}
+            />
+          ))}
+        </div>
+
+        {/* Add set */}
+        <button
+          onPointerDown={e => e.stopPropagation()}
+          onClick={onAddSet}
+          className="w-full mt-2 py-2.5 border border-dashed border-white/12 rounded-xl text-sm text-white/35 active:bg-white/5 flex items-center justify-center gap-1.5"
+        >
+          <Plus size={14} />
+          Add set
+        </button>
+      </div>
+    </Reorder.Item>
+  )
+}
+
 // Swipeable set row — drag left to reveal delete, release past threshold to delete
 function SwipeableSetRow({
   s, kgLabel, onUpdate, onSave, onDelete,
@@ -640,34 +742,26 @@ function ActiveSession({
   session: { session_id: number; name: string; exercises: TrainingExercise[] }
   onFinish: () => void
 }) {
+  const [exercises, setExercises] = useState<TrainingExercise[]>(session.exercises)
   const [sets, setSets] = useState<Record<number, ActiveSet[]>>({})
   const [perf, setPerf] = useState<Record<number, LastPerformance>>({})
-  const [activeExIdx, setActiveExIdx] = useState(0)
   const [showAddEx, setShowAddEx] = useState(session.exercises.length === 0)
-  const [allExercises, setAllExercises] = useState<TrainingExercise[]>(session.exercises)
   const [finishing, setFinishing] = useState(false)
   const [finishStrain, setFinishStrain] = useState<number | null>(null)
   const [restActive, setRestActive] = useState(false)
   const [restTotal, setRestTotal] = useState(REST_DEFAULT)
 
   useEffect(() => {
-    allExercises.forEach(ex => {
+    exercises.forEach(ex => {
       if (perf[ex.id]) return
       api.training.lastPerformance(ex.id).then(p => {
         setPerf(prev => ({ ...prev, [ex.id]: p }))
       }).catch(() => {})
     })
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [allExercises])
+  }, [exercises])
 
-  const activeEx = allExercises[activeExIdx] ?? null
-  const exSets: ActiveSet[] = activeEx ? (sets[activeEx.id] ?? []) : []
-  const lastP = activeEx ? perf[activeEx.id] : null
-  const rec = lastP?.recommendation ?? null
-
-  const addSet = () => {
-    if (!activeEx) return
-    const exId = activeEx.id
+  const addSet = (exId: number) => {
     setSets(prev => {
       const cur = prev[exId] ?? []
       const last = cur[cur.length - 1]
@@ -684,18 +778,15 @@ function ActiveSession({
     })
   }
 
-  const updateSet = (idx: number, field: 'weight_kg' | 'reps', val: string) => {
-    if (!activeEx) return
+  const updateSet = (exId: number, idx: number, field: 'weight_kg' | 'reps', val: string) => {
     setSets(prev => {
-      const cur = [...(prev[activeEx.id] ?? [])]
+      const cur = [...(prev[exId] ?? [])]
       cur[idx] = { ...cur[idx], [field]: val }
-      return { ...prev, [activeEx.id]: cur }
+      return { ...prev, [exId]: cur }
     })
   }
 
-  const saveSet = async (idx: number) => {
-    if (!activeEx) return
-    const exId = activeEx.id
+  const saveSet = async (exId: number, idx: number) => {
     const s = (sets[exId] ?? [])[idx]
     if (!s || !s.reps) return
     try {
@@ -710,14 +801,11 @@ function ActiveSession({
         cur[idx] = { ...cur[idx], saved: true, set_id: res.set_id }
         return { ...prev, [exId]: cur }
       })
-      // Start rest timer after saving a set
       setRestActive(true)
     } catch {}
   }
 
-  const deleteSet = async (idx: number) => {
-    if (!activeEx) return
-    const exId = activeEx.id
+  const deleteSet = async (exId: number, idx: number) => {
     const s = (sets[exId] ?? [])[idx]
     if (s?.set_id) {
       try { await api.training.deleteSet(s.set_id) } catch {}
@@ -727,6 +815,11 @@ function ActiveSession({
         .map((x, i) => ({ ...x, set_number: i + 1 }))
       return { ...prev, [exId]: cur }
     })
+  }
+
+  const removeExercise = (exId: number) => {
+    setExercises(prev => prev.filter(e => e.id !== exId))
+    setSets(prev => { const n = { ...prev }; delete n[exId]; return n })
   }
 
   const finish = async () => {
@@ -744,8 +837,6 @@ function ActiveSession({
     }
   }
 
-  const kgLabel = activeEx?.equipment === 'Dumbbell' ? 'ea' : 'kg'
-
   return (
     <>
       <motion.div
@@ -756,7 +847,7 @@ function ActiveSession({
         className="fixed inset-0 z-[60] flex flex-col bg-[#0a0a0a]"
         style={{ paddingTop: 'env(safe-area-inset-top)', paddingBottom: 'env(safe-area-inset-bottom)' }}
       >
-        {/* ── Header ── */}
+        {/* Header */}
         <div className="flex items-center gap-3 px-4 py-3 border-b border-white/8 flex-shrink-0">
           <div className="flex-1 min-w-0">
             <p className="text-sm font-semibold text-white truncate">{session.name}</p>
@@ -771,136 +862,82 @@ function ActiveSession({
           </button>
         </div>
 
-        {/* ── Exercise tab bar ── */}
-        <div className="flex border-b border-white/8 overflow-x-auto no-scrollbar flex-shrink-0">
-          {allExercises.map((ex, i) => {
-            const savedCount = (sets[ex.id] ?? []).filter(s => s.saved).length
-            const isActive = i === activeExIdx
-            // Shorten long names: first 2 words
-            const shortName = ex.name.split(' ').slice(0, 2).join(' ')
-            return (
+        {/* Scrollable exercise list */}
+        <div className="flex-1 overflow-y-auto">
+          {exercises.length === 0 ? (
+            <div className="flex flex-col items-center justify-center h-full text-white/30 pb-10">
+              <Dumbbell size={32} className="mb-3 opacity-30" />
+              <p className="text-sm mb-4">No exercises yet</p>
               <button
-                key={ex.id}
-                onClick={() => setActiveExIdx(i)}
-                className={`relative flex-shrink-0 px-4 py-3 text-xs font-medium transition-colors ${
-                  isActive ? 'text-white' : 'text-white/35 active:text-white/60'
-                }`}
+                onClick={() => setShowAddEx(true)}
+                className="px-5 py-2.5 bg-indigo-500 rounded-xl text-sm font-semibold text-white"
               >
-                {shortName}
-                {savedCount > 0 && (
-                  <span className="ml-1.5 inline-flex items-center justify-center w-4 h-4 bg-green-500 rounded-full text-[9px] text-black font-bold">
-                    {savedCount}
-                  </span>
-                )}
-                {isActive && (
-                  <span className="absolute bottom-0 left-3 right-3 h-[2px] bg-indigo-500 rounded-full" />
-                )}
+                Add Exercise
               </button>
-            )
-          })}
-          {/* Add exercise tab */}
-          <button
-            onClick={() => setShowAddEx(true)}
-            className="flex-shrink-0 px-4 py-3 text-white/30 active:text-white/60"
-          >
-            <Plus size={15} />
-          </button>
+            </div>
+          ) : (
+            <>
+              <Reorder.Group
+                axis="y"
+                values={exercises}
+                onReorder={setExercises}
+                as="div"
+                className="px-4 pt-3 space-y-3"
+              >
+                {exercises.map(ex => (
+                  <ExerciseCard
+                    key={ex.id}
+                    ex={ex}
+                    exSets={sets[ex.id] ?? []}
+                    kgLabel={ex.equipment === 'Dumbbell' ? 'ea' : 'kg'}
+                    rec={perf[ex.id]?.recommendation ?? null}
+                    lastP={perf[ex.id] ?? null}
+                    onAddSet={() => addSet(ex.id)}
+                    onUpdate={(idx, field, val) => updateSet(ex.id, idx, field, val)}
+                    onSave={(idx) => saveSet(ex.id, idx)}
+                    onDelete={(idx) => deleteSet(ex.id, idx)}
+                    onRemove={() => removeExercise(ex.id)}
+                  />
+                ))}
+              </Reorder.Group>
+
+              <div className="px-4 pt-3 pb-6">
+                <button
+                  onClick={() => setShowAddEx(true)}
+                  className="w-full flex items-center justify-center gap-2 py-3.5 border border-dashed border-white/15 rounded-2xl text-white/40 text-sm active:bg-white/5"
+                >
+                  <Plus size={16} />
+                  Add Exercise
+                </button>
+              </div>
+            </>
+          )}
         </div>
 
-        {/* ── Main content area ── */}
-        {activeEx ? (
-          <div className="flex flex-col flex-1 min-h-0">
-
-            {/* Compact info bar: DUP + last perf */}
-            {(rec || lastP?.summary) && (
-              <div className="flex items-center gap-3 px-4 py-2.5 border-b border-white/5 flex-shrink-0">
-                {rec && (
-                  <div className={`flex items-center gap-2 flex-1 min-w-0 ${PHASE_STYLE[rec.phase]?.text ?? 'text-white/40'}`}>
-                    <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${PHASE_STYLE[rec.phase]?.dot ?? 'bg-white/30'}`} />
-                    <span className="text-[11px] font-semibold uppercase tracking-wide">{rec.phase}</span>
-                    <span className="text-[11px] text-white/50">
-                      {rec.sets}×{rec.reps_low}{rec.reps_low !== rec.reps_high ? `–${rec.reps_high}` : ''}
-                      {rec.weight_kg ? ` @ ${rec.weight_kg}kg` : ''}
-                    </span>
-                  </div>
-                )}
-                {lastP?.summary && (
-                  <span className="text-[11px] text-white/30 truncate flex-shrink-0">
-                    Last: {lastP.summary}
-                  </span>
-                )}
-              </div>
-            )}
-
-            {/* Column headers */}
-            <div className="flex items-center gap-2 px-4 pt-3 pb-1.5 flex-shrink-0">
-              <span className="w-7 text-[10px] text-white/20 text-center flex-shrink-0">SET</span>
-              <span className="flex-1 text-[10px] text-white/20 text-center">WEIGHT</span>
-              <span className="w-5 flex-shrink-0" />
-              <span className="w-14 text-[10px] text-white/20 text-center flex-shrink-0">REPS</span>
-              <span className="w-9 flex-shrink-0" />
+        {/* Rest timer — pinned at bottom when active */}
+        <AnimatePresence>
+          {restActive && (
+            <div className="px-4 pb-3 pt-1 flex-shrink-0">
+              <RestTimer
+                key={restTotal}
+                initialSeconds={restTotal}
+                onDone={() => setRestActive(false)}
+                onSkip={() => setRestActive(false)}
+                onAdjust={delta => setRestTotal(t => Math.max(15, t + delta))}
+              />
             </div>
-
-            {/* Set rows — scrollable if needed, but sized to fit screen */}
-            <div className="flex-1 overflow-y-auto px-4 pb-2 space-y-1.5">
-              {exSets.map((s, i) => (
-                <SwipeableSetRow
-                  key={`${activeEx.id}-${i}`}
-                  s={s}
-                  kgLabel={kgLabel}
-                  onUpdate={(field, val) => updateSet(i, field, val)}
-                  onSave={() => saveSet(i)}
-                  onDelete={() => deleteSet(i)}
-                />
-              ))}
-            </div>
-
-            {/* Rest timer + Add set — pinned above bottom */}
-            <div className="px-4 pb-3 pt-1 flex-shrink-0 space-y-2">
-              <AnimatePresence>
-                {restActive && (
-                  <RestTimer
-                    key={restTotal}
-                    initialSeconds={restTotal}
-                    onDone={() => setRestActive(false)}
-                    onSkip={() => setRestActive(false)}
-                    onAdjust={delta => setRestTotal(t => Math.max(15, t + delta))}
-                  />
-                )}
-              </AnimatePresence>
-              <button
-                onClick={addSet}
-                className="w-full py-3 border border-dashed border-white/12 rounded-xl text-sm text-white/35 active:bg-white/5 flex items-center justify-center gap-1.5"
-              >
-                <Plus size={14} />
-                Add set
-              </button>
-            </div>
-          </div>
-        ) : (
-          <div className="flex-1 flex flex-col items-center justify-center text-white/30">
-            <Dumbbell size={32} className="mb-3 opacity-30" />
-            <p className="text-sm mb-4">No exercises yet</p>
-            <button
-              onClick={() => setShowAddEx(true)}
-              className="px-5 py-2.5 bg-indigo-500 rounded-xl text-sm font-semibold text-white"
-            >
-              Add Exercise
-            </button>
-          </div>
-        )}
+          )}
+        </AnimatePresence>
       </motion.div>
 
       <AnimatePresence>
         {showAddEx && (
-          <div className="fixed inset-0 z-50">
+          <div className="fixed inset-0 z-[70]">
             <ExercisePicker
               onClose={() => setShowAddEx(false)}
               onSelect={([ex]) => {
-                if (ex && !allExercises.find(e => e.id === ex.id)) {
-                  const newIdx = allExercises.length
-                  setAllExercises(prev => [...prev, ex])
-                  setActiveExIdx(newIdx)
+                if (ex && !exercises.find(e => e.id === ex.id)) {
+                  setExercises(prev => [...prev, ex])
                 }
                 setShowAddEx(false)
               }}
@@ -916,7 +953,7 @@ function ActiveSession({
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
-            className="fixed inset-0 z-50 flex items-center justify-center bg-black/80"
+            className="fixed inset-0 z-[80] flex items-center justify-center bg-black/80"
           >
             <motion.div
               initial={{ scale: 0.85, opacity: 0 }}
