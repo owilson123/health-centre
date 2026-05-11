@@ -436,29 +436,6 @@ const PHASE_STYLE: Record<string, { bg: string; text: string; dot: string }> = {
   Power:       { bg: 'bg-amber-500/15',  text: 'text-amber-300',  dot: 'bg-amber-400' },
 }
 
-function DupBadge({ rec }: { rec: import('@/lib/api').DupRecommendation }) {
-  const style = PHASE_STYLE[rec.phase] ?? PHASE_STYLE.Hypertrophy
-  const weightStr = rec.weight_kg
-    ? `${rec.weight_kg} kg${rec.per_hand ? ' / hand' : ''}`
-    : 'Bodyweight'
-  return (
-    <div className={`rounded-xl p-3 ${style.bg} border border-white/5`}>
-      <div className="flex items-center gap-2 mb-1.5">
-        <span className={`w-1.5 h-1.5 rounded-full ${style.dot}`} />
-        <span className={`text-[11px] font-semibold uppercase tracking-wider ${style.text}`}>
-          {rec.phase} Day
-        </span>
-      </div>
-      <div className="flex items-baseline gap-3">
-        <span className="text-white font-bold text-base">
-          {rec.sets} × {rec.reps_low}{rec.reps_low !== rec.reps_high ? `–${rec.reps_high}` : ''}
-        </span>
-        <span className={`text-sm font-semibold ${style.text}`}>{weightStr}</span>
-      </div>
-      <p className="text-[10px] text-white/30 mt-1">{rec.note}</p>
-    </div>
-  )
-}
 
 // ─── Rest Timer ──────────────────────────────────────────────────────────────
 
@@ -578,10 +555,9 @@ interface ActiveSet {
 
 // Swipeable set row — drag left to reveal delete, release past threshold to delete
 function SwipeableSetRow({
-  s, idx, kgLabel, onUpdate, onSave, onDelete,
+  s, kgLabel, onUpdate, onSave, onDelete,
 }: {
   s: ActiveSet
-  idx: number
   kgLabel: string
   onUpdate: (field: 'weight_kg' | 'reps', val: string) => void
   onSave: () => void
@@ -871,7 +847,6 @@ function ActiveSession({
                 <SwipeableSetRow
                   key={`${activeEx.id}-${i}`}
                   s={s}
-                  idx={i}
                   kgLabel={kgLabel}
                   onUpdate={(field, val) => updateSet(i, field, val)}
                   onSave={() => saveSet(i)}
