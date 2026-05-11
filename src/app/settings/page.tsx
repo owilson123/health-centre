@@ -9,7 +9,9 @@ import { useRouter } from 'next/navigation'
 
 export default function SettingsPage() {
   const router = useRouter()
-  const user = getUser()
+  const [user, setUser] = useState<{ userId: string; display: string } | null>(null)
+
+  useEffect(() => { setUser(getUser()) }, [])
 
   const [garmin, setGarmin] = useState<{ connected: boolean; email?: string; connected_at?: string } | null>(null)
   const [garminLoading, setGarminLoading] = useState(true)
