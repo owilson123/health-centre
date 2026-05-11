@@ -112,11 +112,11 @@ function TrainingLoadModal({ recovery, onClose }: { recovery: RecoveryScore; onC
   const { Icon } = cfg
 
   const recFactors = [
-    { icon: Brain, label: 'HRV', value: recovery.components.hrv, desc: 'Heart rate variability vs baseline' },
-    { icon: Heart, label: 'Resting HR', value: recovery.components.resting_hr, desc: 'Resting heart rate vs baseline' },
-    { icon: Wind, label: 'Sleep', value: recovery.components.sleep, desc: 'Last night\'s sleep quality' },
-    { icon: Battery, label: 'Body Battery', value: recovery.components.body_battery, desc: 'Garmin body battery on wake' },
-    { icon: Flame, label: 'Stress', value: recovery.components.stress, desc: 'Yesterday\'s stress level' },
+    { icon: Brain, label: 'HRV', value: recovery.components.hrv },
+    { icon: Heart, label: 'Resting HR', value: recovery.components.resting_hr },
+    { icon: Wind, label: 'Sleep', value: recovery.components.sleep },
+    { icon: Battery, label: 'Body Battery', value: recovery.components.body_battery },
+    { icon: Flame, label: 'Stress', value: recovery.components.stress },
   ]
 
   const acwrPct = Math.min((recovery.acwr / 2) * 100, 100)
@@ -231,7 +231,7 @@ function TrainingLoadModal({ recovery, onClose }: { recovery: RecoveryScore; onC
             <div className="rounded-2xl bg-white/5 border border-white/8 p-4">
               <p className="text-xs text-white/40 uppercase tracking-wider mb-3">Recovery readiness</p>
               <div className="space-y-3">
-                {recFactors.map(({ icon: FactorIcon, label: fl, value, desc }) => (
+                {recFactors.map(({ icon: FactorIcon, label: fl, value }) => (
                   <div key={fl} className="flex items-center gap-3">
                     <FactorIcon size={14} className="text-white/30 shrink-0" />
                     <div className="flex-1 min-w-0">
