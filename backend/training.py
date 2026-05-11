@@ -281,6 +281,65 @@ DEFAULT_CATEGORY_SCALE: dict[str, float | None] = {
     "Core": None,   # reps only
 }
 
+# Category for each known exercise (built from EXERCISES list + a few extras in SCALE)
+_EXERCISE_CATEGORY: dict[str, str] = {name: cat for name, cat, _ in EXERCISES}
+
+# Movement/muscle keywords that carry more weight in similarity scoring
+_KEY_TERMS = {
+    # Movements
+    "pushdown", "curl", "press", "row", "deadlift", "squat", "fly", "raise",
+    "extension", "pulldown", "pullup", "chinup", "shrug", "thrust", "lunge",
+    "dip", "crunch", "plank", "kickback", "crossover", "pullover",
+    # Muscles
+    "tricep", "bicep", "chest", "shoulder", "lat", "glute", "quad",
+    "hamstring", "calf", "back", "core",
+    # Meaningful modifiers
+    "incline", "decline", "overhead", "reverse", "hammer", "close", "wide",
+    "seated", "standing", "cable", "barbell", "dumbbell", "machine",
+}
+
+import re as _re
+
+def _tokenize(name: str) -> set[str]:
+    return {t for t in _re.split(r"[^a-z]+", name.lower()) if len(t) > 1}
+
+def _weighted_jaccard(a: set[str], b: set[str]) -> float:
+    if not a or not b:
+        return 0.0
+    union = a | b
+    def w(t: str) -> float:
+        return 2.5 if t in _KEY_TERMS else 1.0
+    shared  = sum(w(t) for t in a & b)
+    total   = sum(w(t) for t in union)
+    return shared / total if total else 0.0
+
+def _find_similar_scale(exercise_name: str, category: str) -> tuple[str, float] | None:
+    """
+    Find the closest known exercise (by weighted token similarity) in the same
+    category. Returns (matched_name, scale) or None if confidence is too low.
+    """
+    tokens = _tokenize(exercise_name)
+    best_name:  str   = ""
+    best_score: float = 0.0
+    best_scale: float = 0.0
+
+    for known_name, scale in SCALE.items():
+        if scale is None:
+            continue
+        # Only compare within the same category
+        if _EXERCISE_CATEGORY.get(known_name) != category:
+            continue
+        score = _weighted_jaccard(tokens, _tokenize(known_name))
+        if score > best_score:
+            best_score = score
+            best_name  = known_name
+            best_scale = scale
+
+    # Require at least one meaningful shared keyword (score > 0.20)
+    if best_score >= 0.20 and best_name:
+        return best_name, best_scale
+    return None
+
 # Dumbbell exercises where weight shown should be per-dumbbell (scale/2)
 DUMBBELL_PER_HAND = {
     "Dumbbell Bench Press", "Incline Dumbbell Press", "Dumbbell Shoulder Press",
@@ -352,14 +411,23 @@ def _dup_recommendation(conn, exercise_name: str, category: str) -> dict | None:
     Build a full DUP recommendation for an exercise.
     Returns None if no anchor data yet.
     """
-    # Look up scale — known exercises first, then category default for custom ones
+    # Look up scale:
+    #  1. Exact match in SCALE dict (built-in exercises)
+    #  2. Similarity match within category (custom exercises)
+    #  3. Category default fallback
+    matched_from: str | None = None   # name of the matched exercise, if any
+
     if exercise_name in SCALE:
         scale = SCALE[exercise_name]
     else:
-        scale = DEFAULT_CATEGORY_SCALE.get(category)
+        similar = _find_similar_scale(exercise_name, category)
+        if similar:
+            matched_from, scale = similar
+        else:
+            scale = DEFAULT_CATEGORY_SCALE.get(category)
 
     if scale is None:
-        # Bodyweight / Core / unknown — give reps-only recommendation
+        # Bodyweight / Core / no match — give reps-only recommendation
         phase = _dup_phase(conn, category)
         return {
             "phase": phase["name"],
@@ -416,8 +484,8 @@ def _dup_recommendation(conn, exercise_name: str, category: str) -> dict | None:
         "anchor_name": anchor_name,
         "anchor_1rm":  round(anchor_1rm, 1),
         "note": (
-            f"Custom exercise — estimated from {anchor_name} ({round(anchor_1rm)}kg)"
-            if exercise_name not in SCALE
+            f"Matched to {matched_from} · based on {anchor_name} {round(anchor_1rm)}kg"
+            if matched_from
             else (
                 f"Based on {anchor_name} est. 1RM {round(anchor_1rm)}kg"
                 if anchor_name != exercise_name

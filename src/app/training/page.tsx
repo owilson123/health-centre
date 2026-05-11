@@ -131,10 +131,9 @@ function CreateExerciseForm({ onCreated, onBack }: {
 
         <div className="p-3 bg-white/4 rounded-xl">
           <p className="text-xs text-white/40 leading-relaxed">
-            DUP recommendations for custom exercises use a category default scale
-            ({category === 'Push' ? '70% of bench' : category === 'Pull' ? '70% of row' :
-              category === 'Legs' ? '60% of squat' : category === 'Arms' ? '22% of bench' : 'reps only'}).
-            As you log sets the system will refine this automatically.
+            DUP weights are estimated by matching your exercise name to the closest
+            similar movement in the library (e.g. &quot;Straight Bar Pushdown&quot; → Tricep Pushdown).
+            The recommendation note will show what it matched to.
           </p>
         </div>
       </div>
