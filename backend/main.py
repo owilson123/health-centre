@@ -187,32 +187,75 @@ def get_dashboard(user_id: str = Depends(get_current_user)):
     strain   = calc_strain_score(today, recovery_score=recovery["score"])
     calories = calc_calories(today)
 
-    # Supplement strain with today's strength training sessions.
-    # HR-based TRIMP underestimates lifting; INOL-based strength_strain corrects this.
-    # We take the max of (garmin activity strain, strength strain) and add any
-    # non-overlapping strength contribution on top of garmin background load.
+    # ── Strength strain: merge app sessions + unmatched Garmin strength activities ──
+    # Garmin strength-type activities are excluded from TRIMP (see metrics.py) because
+    # HR-based TRIMP is unreliable for lifting. Instead we use INOL from the training
+    # tab. But if someone didn't log a session on the app, we fall back to a
+    # calories/duration estimate from the Garmin activity so the day isn't zero.
+    #
+    # Matching strategy: 1 app session "covers" 1 Garmin session (by count, ordered by
+    # time). Any Garmin sessions beyond the app session count are "unmatched" and get a
+    # fallback strain derived from calories burned or active duration.
+
+    _STRENGTH_TYPES = (
+        "strength_training", "gym_and_fitness_equipment",
+        "functional_training", "crossfit", "weightlifting",
+    )
+    _placeholders = ",".join("?" * len(_STRENGTH_TYPES))
+
     with db() as conn:
         today_str = today.isoformat()
-        strength_rows = conn.execute("""
+
+        # App sessions completed today with a computed INOL strain
+        app_strength_rows = conn.execute("""
             SELECT strength_strain FROM workout_sessions
             WHERE DATE(started_at) = ? AND finished_at IS NOT NULL AND strength_strain > 0
+            ORDER BY started_at
         """, (today_str,)).fetchall()
+
+        # Garmin strength activities synced for today (excluded from TRIMP)
+        garmin_strength_rows = conn.execute(f"""
+            SELECT duration_seconds, calories FROM activities
+            WHERE date = ? AND type IN ({_placeholders})
+            ORDER BY id
+        """, (today_str, *_STRENGTH_TYPES)).fetchall()
+
         last_sync_row = conn.execute(
             "SELECT synced_at FROM sync_log WHERE status='ok' ORDER BY synced_at DESC LIMIT 1"
         ).fetchone()
 
-    if strength_rows:
-        total_strength_strain = sum(r["strength_strain"] for r in strength_rows)
+    n_app    = len(app_strength_rows)
+    n_garmin = len(garmin_strength_rows)
+
+    # App INOL strain for logged sessions
+    app_strain = sum(r["strength_strain"] for r in app_strength_rows)
+
+    # Fallback strain for Garmin sessions that have no matching app session.
+    # We assume sessions pair off 1-to-1 by time order; extras are unmatched.
+    unmatched_garmin = garmin_strength_rows[n_app:]
+    garmin_fallback = 0.0
+    for row in unmatched_garmin:
+        cal = row["calories"] or 0
+        dur = row["duration_seconds"] or 0
+        if cal > 0:
+            # ~5 calories per strain point is a reasonable proxy for moderate lifting
+            garmin_fallback += min(70.0, cal / 5.0)
+        elif dur > 0:
+            # Assume ~0.7 strain per minute as a conservative floor
+            garmin_fallback += min(60.0, (dur / 60.0) * 0.7)
+
+    total_strength_strain = app_strain + garmin_fallback
+
+    if total_strength_strain > 0 or n_garmin > 0:
         garmin_cardio_strain = strain.get("score", 0)
-        # Clean addition: Garmin strength-type activities are excluded from TRIMP in
-        # calc_strain_score, so there is no overlap — cardio strain + lifting strain are
-        # fully independent signals and can be summed directly.
+        # Clean addition: cardio (TRIMP) and lifting (INOL) are fully independent signals
         combined = round(min(100, garmin_cardio_strain + total_strength_strain))
         strain = {
             **strain,
             "score": combined,
             "strength_strain": round(total_strength_strain, 1),
-            "strength_sessions_today": len(strength_rows),
+            "strength_sessions_today": n_app,
+            "garmin_strength_sessions_today": n_garmin,
         }
 
     return {
