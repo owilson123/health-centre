@@ -54,6 +54,12 @@ def init_training_db(user_id: str | None = None):
             reps        INTEGER NOT NULL,
             logged_at   TEXT DEFAULT (datetime('now'))
         );
+
+        CREATE TABLE IF NOT EXISTS user_maxes (
+            exercise_name TEXT PRIMARY KEY,
+            one_rm_kg     REAL NOT NULL,
+            updated_at    TEXT DEFAULT (datetime('now'))
+        );
         """)
         _seed_exercises(conn)
 
@@ -289,7 +295,15 @@ def _round_weight(kg: float) -> float:
 
 
 def _best_1rm(conn, exercise_name: str) -> float | None:
-    """Return best estimated 1RM (kg) for a named exercise, or None."""
+    """Return best estimated 1RM (kg) for a named exercise, or None.
+    Manual user_maxes entries take precedence over logged data."""
+    # 1. Manual override
+    manual = conn.execute(
+        "SELECT one_rm_kg FROM user_maxes WHERE exercise_name = ?", (exercise_name,)
+    ).fetchone()
+    if manual:
+        return round(manual["one_rm_kg"], 1)
+    # 2. Best Epley estimate from logged sets
     row = conn.execute(
         "SELECT id FROM exercises WHERE name = ?", (exercise_name,)
     ).fetchone()
@@ -647,3 +661,49 @@ def last_performance(exercise_id: int, _uid: str = Depends(get_current_user)):
         "session_date": session_date,
         "recommendation": recommendation,
     }
+
+
+# ─── User maxes (manual 1RM overrides) ───────────────────────────────────────
+
+ANCHOR_NAMES = ["Barbell Bench Press", "Barbell Row", "Squat"]
+
+class MaxesUpdate(BaseModel):
+    bench_1rm:  Optional[float] = None
+    row_1rm:    Optional[float] = None
+    squat_1rm:  Optional[float] = None
+
+
+@router.get("/maxes")
+def get_maxes(_uid: str = Depends(get_current_user)):
+    with db() as conn:
+        rows = conn.execute(
+            "SELECT exercise_name, one_rm_kg FROM user_maxes WHERE exercise_name IN (?,?,?)",
+            ANCHOR_NAMES
+        ).fetchall()
+    data = {r["exercise_name"]: r["one_rm_kg"] for r in rows}
+    return {
+        "bench_1rm": data.get("Barbell Bench Press"),
+        "row_1rm":   data.get("Barbell Row"),
+        "squat_1rm": data.get("Squat"),
+    }
+
+
+@router.put("/maxes")
+def update_maxes(body: MaxesUpdate, _uid: str = Depends(get_current_user)):
+    mapping = {
+        "Barbell Bench Press": body.bench_1rm,
+        "Barbell Row":         body.row_1rm,
+        "Squat":               body.squat_1rm,
+    }
+    with db() as conn:
+        for name, val in mapping.items():
+            if val is not None and val > 0:
+                conn.execute(
+                    """INSERT INTO user_maxes (exercise_name, one_rm_kg, updated_at)
+                       VALUES (?, ?, datetime('now'))
+                       ON CONFLICT(exercise_name) DO UPDATE SET
+                         one_rm_kg=excluded.one_rm_kg,
+                         updated_at=excluded.updated_at""",
+                    (name, val)
+                )
+    return {"status": "updated"}

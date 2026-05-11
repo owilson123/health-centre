@@ -658,6 +658,109 @@ function SessionDetailSheet({ sid, onClose }: { sid: number; onClose: () => void
   )
 }
 
+// ─── Strength Profile (anchor maxes) ─────────────────────────────────────────
+
+function StrengthProfile() {
+  const [maxes, setMaxes] = useState<{ bench_1rm: number | null; row_1rm: number | null; squat_1rm: number | null } | null>(null)
+  const [editing, setEditing] = useState(false)
+  const [bench, setBench] = useState('')
+  const [row, setRow]     = useState('')
+  const [squat, setSquat] = useState('')
+  const [saving, setSaving] = useState(false)
+
+  useEffect(() => {
+    api.training.getMaxes().then(m => {
+      setMaxes(m)
+      setBench(m.bench_1rm ? String(m.bench_1rm) : '')
+      setRow(m.row_1rm     ? String(m.row_1rm)   : '')
+      setSquat(m.squat_1rm ? String(m.squat_1rm) : '')
+    }).catch(() => {})
+  }, [])
+
+  const save = async () => {
+    setSaving(true)
+    try {
+      await api.training.updateMaxes({
+        bench_1rm: bench ? parseFloat(bench) : undefined,
+        row_1rm:   row   ? parseFloat(row)   : undefined,
+        squat_1rm: squat ? parseFloat(squat) : undefined,
+      })
+      const updated = {
+        bench_1rm: bench ? parseFloat(bench) : null,
+        row_1rm:   row   ? parseFloat(row)   : null,
+        squat_1rm: squat ? parseFloat(squat) : null,
+      }
+      setMaxes(updated)
+      setEditing(false)
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const hasAny = maxes && (maxes.bench_1rm || maxes.row_1rm || maxes.squat_1rm)
+
+  return (
+    <div className="mx-4 mb-4 bg-white/5 rounded-2xl border border-white/8 overflow-hidden">
+      <button
+        onClick={() => setEditing(e => !e)}
+        className="w-full flex items-center justify-between px-4 py-3"
+      >
+        <div className="flex items-center gap-2">
+          <Trophy size={14} className="text-amber-400" />
+          <span className="text-sm font-semibold">Strength Profile</span>
+          {!hasAny && <span className="text-[10px] text-amber-400 bg-amber-400/10 px-2 py-0.5 rounded-full">Set your maxes</span>}
+        </div>
+        <ChevronDown size={14} className={`text-white/30 transition-transform ${editing ? 'rotate-180' : ''}`} />
+      </button>
+
+      {!editing && hasAny && (
+        <div className="flex px-4 pb-3 gap-4">
+          {[
+            { label: 'Bench', val: maxes?.bench_1rm },
+            { label: 'Row',   val: maxes?.row_1rm },
+            { label: 'Squat', val: maxes?.squat_1rm },
+          ].map(({ label, val }) => (
+            <div key={label} className="flex-1 text-center">
+              <p className="text-base font-bold">{val ? `${val}` : '—'}</p>
+              <p className="text-[10px] text-white/30 mt-0.5">{label} 1RM kg</p>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {editing && (
+        <div className="px-4 pb-4 space-y-3">
+          <p className="text-xs text-white/40">Enter your estimated 1-rep maxes. These seed all DUP weight recommendations.</p>
+          {[
+            { label: 'Bench Press 1RM (kg)', val: bench, set: setBench },
+            { label: 'Barbell Row 1RM (kg)', val: row,   set: setRow },
+            { label: 'Squat 1RM (kg)',        val: squat, set: setSquat },
+          ].map(({ label, val, set }) => (
+            <div key={label}>
+              <p className="text-xs text-white/40 mb-1">{label}</p>
+              <input
+                type="number"
+                inputMode="decimal"
+                value={val}
+                onChange={e => set(e.target.value)}
+                placeholder="e.g. 100"
+                className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-2.5 text-sm text-white outline-none focus:border-white/25"
+              />
+            </div>
+          ))}
+          <button
+            onClick={save}
+            disabled={saving}
+            className="w-full py-2.5 bg-indigo-500 rounded-xl text-sm font-semibold disabled:opacity-50"
+          >
+            {saving ? 'Saving…' : 'Save'}
+          </button>
+        </div>
+      )}
+    </div>
+  )
+}
+
 // ─── Main Training Page ───────────────────────────────────────────────────────
 
 type Tab = 'templates' | 'history'
@@ -693,6 +796,7 @@ export default function TrainingPage() {
   const startFromTemplate = async (t: WorkoutTemplate) => {
     const res = await api.training.startSession({ template_id: t.id })
     setActiveSession(res)
+    setShowQuickStart(false)
   }
 
   const startQuick = async () => {
@@ -717,7 +821,7 @@ export default function TrainingPage() {
             <p className="text-sm text-white/40 mt-0.5">Track your workouts</p>
           </div>
           <button
-            onClick={() => { setShowQuickStart(true) }}
+            onClick={() => setShowQuickStart(true)}
             className="flex items-center gap-2 px-4 py-2.5 bg-indigo-500 rounded-2xl text-sm font-semibold active:scale-95 transition-transform"
           >
             <Play size={14} />
@@ -725,6 +829,9 @@ export default function TrainingPage() {
           </button>
         </div>
       </div>
+
+      {/* Strength profile */}
+      <StrengthProfile />
 
       {/* Tabs */}
       <div className="flex gap-1 px-4 mb-4">
@@ -748,10 +855,7 @@ export default function TrainingPage() {
       ) : tab === 'templates' ? (
         <div className="px-4 space-y-3">
           {templates.map(t => (
-            <div
-              key={t.id}
-              className="bg-white/5 rounded-2xl p-4 border border-white/8"
-            >
+            <div key={t.id} className="bg-white/5 rounded-2xl p-4 border border-white/8">
               <div className="flex items-start justify-between mb-3">
                 <div>
                   <h3 className="font-semibold text-white">{t.name}</h3>
@@ -772,8 +876,6 @@ export default function TrainingPage() {
                   </button>
                 </div>
               </div>
-
-              {/* Exercise pills */}
               <div className="flex flex-wrap gap-1.5 mb-3">
                 {t.exercises.slice(0, 6).map(ex => (
                   <span key={ex.id} className="text-[11px] bg-white/8 text-white/60 px-2 py-0.5 rounded-lg">
@@ -784,7 +886,6 @@ export default function TrainingPage() {
                   <span className="text-[11px] text-white/30 px-1">+{t.exercises.length - 6} more</span>
                 )}
               </div>
-
               <button
                 onClick={() => startFromTemplate(t)}
                 className="w-full py-2.5 bg-indigo-500/15 border border-indigo-500/30 rounded-xl text-sm font-semibold text-indigo-300 active:bg-indigo-500/25 transition-colors"
@@ -793,8 +894,6 @@ export default function TrainingPage() {
               </button>
             </div>
           ))}
-
-          {/* New template */}
           <button
             onClick={() => { setEditTemplate(undefined); setShowBuilder(true) }}
             className="w-full flex items-center justify-center gap-2 py-4 border border-dashed border-white/15 rounded-2xl text-white/40 text-sm active:bg-white/5"
@@ -804,7 +903,6 @@ export default function TrainingPage() {
           </button>
         </div>
       ) : (
-        /* History */
         <div className="px-4 space-y-3">
           {history.length === 0 && (
             <div className="text-center py-16 text-white/30 text-sm">No workouts logged yet</div>
@@ -824,17 +922,14 @@ export default function TrainingPage() {
               </div>
               <div className="flex gap-4">
                 <div className="flex items-center gap-1.5 text-xs text-white/50">
-                  <Dumbbell size={11} />
-                  {s.exercise_count} exercises
+                  <Dumbbell size={11} />{s.exercise_count} exercises
                 </div>
                 <div className="flex items-center gap-1.5 text-xs text-white/50">
-                  <Trophy size={11} />
-                  {s.total_sets} sets
+                  <Trophy size={11} />{s.total_sets} sets
                 </div>
                 {s.total_volume_kg > 0 && (
                   <div className="flex items-center gap-1.5 text-xs text-white/50">
-                    <Weight size={11} />
-                    {s.total_volume_kg.toLocaleString()} kg
+                    <Weight size={11} />{s.total_volume_kg.toLocaleString()} kg
                   </div>
                 )}
               </div>
@@ -843,45 +938,52 @@ export default function TrainingPage() {
         </div>
       )}
 
-      {/* Quick start overlay */}
+      {/* Quick start overlay — z-[60] so it sits above the nav (z-50) */}
       <AnimatePresence>
         {showQuickStart && (
           <motion.div
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
-            className="fixed inset-0 z-40 bg-black/60 flex items-end"
+            className="fixed inset-0 z-[60] bg-black/70 flex items-end"
             onClick={() => setShowQuickStart(false)}
           >
             <motion.div
-              initial={{ y: 80, opacity: 0 }}
-              animate={{ y: 0, opacity: 1 }}
-              exit={{ y: 80, opacity: 0 }}
+              initial={{ y: '100%' }}
+              animate={{ y: 0 }}
+              exit={{ y: '100%' }}
+              transition={{ type: 'spring', damping: 28, stiffness: 300 }}
               onClick={e => e.stopPropagation()}
-              className="w-full bg-[#141414] rounded-t-3xl p-6 border-t border-white/10"
+              className="w-full bg-[#141414] rounded-t-3xl border-t border-white/10"
+              style={{ paddingBottom: 'calc(env(safe-area-inset-bottom) + 1.5rem)' }}
             >
-              <h3 className="text-lg font-semibold mb-4">Start Workout</h3>
-              <div className="space-y-3 mb-4">
-                {templates.slice(0, 3).map(t => (
+              <div className="px-6 pt-6 pb-2">
+                <div className="w-10 h-1 bg-white/15 rounded-full mx-auto mb-5" />
+                <h3 className="text-lg font-semibold mb-4">Start Workout</h3>
+              </div>
+              <div className="px-4 space-y-2 mb-3">
+                {templates.map(t => (
                   <button
                     key={t.id}
-                    onClick={() => { startFromTemplate(t); setShowQuickStart(false) }}
-                    className="w-full flex items-center justify-between bg-white/5 rounded-2xl px-4 py-3 active:bg-white/10"
+                    onClick={() => startFromTemplate(t)}
+                    className="w-full flex items-center justify-between bg-white/6 rounded-2xl px-4 py-3.5 active:bg-white/10"
                   >
                     <div className="text-left">
                       <p className="text-sm font-medium text-white">{t.name}</p>
-                      <p className="text-xs text-white/40">{t.exercises.length} exercises</p>
+                      <p className="text-xs text-white/40 mt-0.5">{t.exercises.length} exercises</p>
                     </div>
                     <ChevronRight size={16} className="text-white/30" />
                   </button>
                 ))}
               </div>
-              <button
-                onClick={startQuick}
-                className="w-full py-3 bg-white/8 rounded-2xl text-sm text-white/70 font-medium active:bg-white/12"
-              >
-                Empty Workout
-              </button>
+              <div className="px-4">
+                <button
+                  onClick={startQuick}
+                  className="w-full py-3.5 bg-indigo-500 rounded-2xl text-sm font-semibold active:bg-indigo-600"
+                >
+                  Empty Workout
+                </button>
+              </div>
             </motion.div>
           </motion.div>
         )}
