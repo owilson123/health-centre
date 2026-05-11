@@ -44,9 +44,20 @@ export interface RecoveryScore {
   insight: string
 }
 
+export interface WorkoutPrescription {
+  type: string
+  label: string
+  zone: string
+  avg_hr_bpm: number
+  duration_minutes: number
+  strain: number
+  description: string
+}
+
 export interface StrainScore {
   score: number
   target: number
+  remaining_to_target: number
   zones: {
     zone1_minutes: number
     zone2_minutes: number
@@ -56,6 +67,14 @@ export interface StrainScore {
   }
   insight: string
   label: string
+  load_breakdown: {
+    activities: number
+    steps: number
+    calories: number
+    stress: number
+    activity_list: Array<{ name: string; type: string; strain: number; duration_seconds: number; avg_hr: number | null }>
+  }
+  prescriptions: WorkoutPrescription[]
 }
 
 export interface CalorieData {

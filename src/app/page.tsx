@@ -2,7 +2,7 @@
 
 import { useCallback, useRef, useState } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { RefreshCw, Clock, Zap, TrendingUp, TrendingDown, Minus, Settings, LogOut, X, ChevronRight, Flame, Brain, Heart, Battery, Wind } from 'lucide-react'
+import { RefreshCw, Clock, Zap, TrendingUp, TrendingDown, Minus, Settings, LogOut, X, ChevronRight, Flame, Brain, Heart, Battery, Wind, Dumbbell, Bike, PersonStanding, Timer, Target } from 'lucide-react'
 import { api } from '@/lib/api'
 import { ScoreRing } from '@/components/ui/ScoreRing'
 import { GlassCard } from '@/components/ui/GlassCard'
@@ -10,7 +10,8 @@ import { SkeletonRing, SkeletonCard } from '@/components/ui/SkeletonCard'
 import { EmptyState } from '@/components/ui/EmptyState'
 import { useDashboard } from '@/lib/hooks'
 import { getGreeting, scoreColor, scoreLabel } from '@/lib/utils'
-import type { RecoveryScore } from '@/lib/types'
+import type { RecoveryScore, StrainScore, WorkoutPrescription } from '@/lib/types'
+import { formatDuration } from '@/lib/utils'
 
 function CalorieArc({ current, predicted }: { current: number; predicted: number }) {
   const pct = Math.min(current / Math.max(predicted, 1), 1)
@@ -285,11 +286,255 @@ function TrainingLoadModal({ recovery, onClose }: { recovery: RecoveryScore; onC
   )
 }
 
+const WORKOUT_ICONS: Record<string, React.ElementType> = {
+  run: PersonStanding,
+  gym: Dumbbell,
+  cycling: Bike,
+}
+
+const ZONE_COLORS: Record<string, string> = {
+  'Zone 2': '#22c55e',
+  'Zone 3': '#f59e0b',
+  'Zone 2–3': '#84cc16',
+  'Zone 4': '#ef4444',
+}
+
+function WorkoutCard({ w, accent }: { w: WorkoutPrescription; accent: string }) {
+  const Icon = WORKOUT_ICONS[w.type] ?? Timer
+  const zoneColor = ZONE_COLORS[w.zone] ?? '#f59e0b'
+  return (
+    <div className="rounded-2xl bg-white/5 border border-white/8 p-4">
+      <div className="flex items-center gap-3 mb-3">
+        <div className="w-9 h-9 rounded-xl flex items-center justify-center shrink-0"
+          style={{ backgroundColor: `${accent}22` }}>
+          <Icon size={17} style={{ color: accent }} />
+        </div>
+        <div className="flex-1 min-w-0">
+          <p className="font-semibold text-sm">{w.label}</p>
+          <p className="text-xs text-white/40">{w.description}</p>
+        </div>
+      </div>
+      <div className="grid grid-cols-3 gap-2">
+        <div className="text-center p-2 rounded-xl bg-white/5">
+          <p className="text-xs text-white/40 mb-0.5">Duration</p>
+          <p className="text-sm font-bold">{w.duration_minutes}m</p>
+        </div>
+        <div className="text-center p-2 rounded-xl bg-white/5">
+          <p className="text-xs text-white/40 mb-0.5">Avg HR</p>
+          <p className="text-sm font-bold">{w.avg_hr_bpm} <span className="text-xs font-normal text-white/40">bpm</span></p>
+        </div>
+        <div className="text-center p-2 rounded-xl bg-white/5">
+          <p className="text-xs text-white/40 mb-0.5">Zone</p>
+          <p className="text-sm font-bold" style={{ color: zoneColor }}>{w.zone}</p>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function StrainModal({ strain, onClose }: { strain: StrainScore; onClose: () => void }) {
+  const accent = '#f59e0b'
+  const remaining = strain.remaining_to_target
+  const alreadyHit = remaining <= 0
+
+  const zoneData = [
+    { label: 'Z1', minutes: strain.zones.zone1_minutes, color: '#3b82f6' },
+    { label: 'Z2', minutes: strain.zones.zone2_minutes, color: '#22c55e' },
+    { label: 'Z3', minutes: strain.zones.zone3_minutes, color: '#f59e0b' },
+    { label: 'Z4', minutes: strain.zones.zone4_minutes, color: '#ef4444' },
+    { label: 'Z5', minutes: strain.zones.zone5_minutes, color: '#7c3aed' },
+  ]
+  const maxZone = Math.max(...zoneData.map(z => z.minutes), 1)
+
+  const breakdown = [
+    { label: 'Workouts', value: strain.load_breakdown.activities, color: '#f59e0b' },
+    { label: 'Steps', value: strain.load_breakdown.steps, color: '#22c55e' },
+    { label: 'Active cals', value: strain.load_breakdown.calories, color: '#f97316' },
+    { label: 'Stress', value: strain.load_breakdown.stress, color: '#a78bfa' },
+  ]
+
+  return (
+    <AnimatePresence>
+      <motion.div className="fixed inset-0 z-50 flex items-end justify-center"
+        initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
+        <motion.div className="absolute inset-0 bg-black/60 backdrop-blur-sm"
+          onClick={onClose} initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} />
+
+        <motion.div
+          className="relative w-full max-w-lg max-h-[92vh] overflow-y-auto rounded-t-3xl bg-[#111] border-t border-white/10"
+          initial={{ y: '100%' }} animate={{ y: 0 }} exit={{ y: '100%' }}
+          transition={{ type: 'spring', damping: 30, stiffness: 300 }}>
+
+          <div className="flex justify-center pt-3 pb-1">
+            <div className="w-10 h-1 rounded-full bg-white/20" />
+          </div>
+
+          <div className="px-5 pb-12 pt-2 space-y-5">
+            {/* Header */}
+            <div className="flex items-start justify-between">
+              <div>
+                <p className="text-xs text-white/40 uppercase tracking-wider mb-1">Today</p>
+                <h2 className="text-xl font-bold">Strain Breakdown</h2>
+              </div>
+              <button onClick={onClose}
+                className="w-8 h-8 rounded-full bg-white/10 flex items-center justify-center active:bg-white/20 mt-1">
+                <X size={14} className="text-white/60" />
+              </button>
+            </div>
+
+            {/* Score + target hero */}
+            <div className="rounded-2xl bg-gradient-to-br from-amber-500/20 to-amber-900/10 border border-amber-500/20 p-4">
+              <div className="flex items-center justify-between mb-3">
+                <div>
+                  <p className="text-xs text-white/40 uppercase tracking-wider mb-1">Current strain</p>
+                  <p className="text-4xl font-bold" style={{ color: accent }}>{strain.score}</p>
+                  <p className="text-sm text-white/50 mt-0.5">{strain.label}</p>
+                </div>
+                <div className="text-right">
+                  <p className="text-xs text-white/40 uppercase tracking-wider mb-1">Target</p>
+                  <p className="text-4xl font-bold text-white/70">{strain.target}</p>
+                  <p className="text-sm mt-0.5" style={{ color: alreadyHit ? '#22c55e' : accent }}>
+                    {alreadyHit ? '✓ Target hit' : `${remaining} remaining`}
+                  </p>
+                </div>
+              </div>
+              {/* Progress bar */}
+              <div className="h-2 bg-white/10 rounded-full overflow-hidden">
+                <motion.div className="h-full rounded-full"
+                  style={{ backgroundColor: alreadyHit ? '#22c55e' : accent }}
+                  initial={{ width: 0 }}
+                  animate={{ width: `${Math.min((strain.score / Math.max(strain.target, 1)) * 100, 100)}%` }}
+                  transition={{ duration: 0.8, ease: 'easeOut' }} />
+              </div>
+            </div>
+
+            {/* How target is calculated */}
+            <div className="rounded-2xl bg-white/5 border border-white/8 p-4">
+              <div className="flex items-center gap-2 mb-3">
+                <Target size={13} className="text-white/40" />
+                <p className="text-xs text-white/40 uppercase tracking-wider">How your target is set</p>
+              </div>
+              <p className="text-sm text-white/70 leading-relaxed mb-3">
+                Your target strain is based on your <span className="text-white font-semibold">recovery score ({strain.target} target today)</span>.
+                Higher recovery → higher target. Lower recovery → your body needs an easier day.
+              </p>
+              <div className="grid grid-cols-3 gap-2 text-center text-xs">
+                <div className="p-2 rounded-xl bg-white/5">
+                  <p className="text-white/40 mb-1">Low recovery</p>
+                  <p className="font-semibold text-blue-400">≤ 33</p>
+                  <p className="text-white/30 mt-0.5">Rest day</p>
+                </div>
+                <div className="p-2 rounded-xl bg-white/5 border border-amber-500/20">
+                  <p className="text-white/40 mb-1">Good recovery</p>
+                  <p className="font-semibold text-amber-400">34–66</p>
+                  <p className="text-white/30 mt-0.5">Moderate</p>
+                </div>
+                <div className="p-2 rounded-xl bg-white/5">
+                  <p className="text-white/40 mb-1">Peak recovery</p>
+                  <p className="font-semibold text-green-400">67–100</p>
+                  <p className="text-white/30 mt-0.5">Push hard</p>
+                </div>
+              </div>
+            </div>
+
+            {/* Load breakdown */}
+            <div className="rounded-2xl bg-white/5 border border-white/8 p-4">
+              <p className="text-xs text-white/40 uppercase tracking-wider mb-3">What built your strain</p>
+              <div className="space-y-2.5">
+                {breakdown.filter(b => b.value > 0).map(b => (
+                  <div key={b.label} className="flex items-center gap-3">
+                    <span className="text-xs text-white/50 w-20 shrink-0">{b.label}</span>
+                    <div className="flex-1 h-2 bg-white/10 rounded-full overflow-hidden">
+                      <motion.div className="h-full rounded-full"
+                        style={{ backgroundColor: b.color }}
+                        initial={{ width: 0 }}
+                        animate={{ width: `${(b.value / Math.max(strain.score, 1)) * 100}%` }}
+                        transition={{ duration: 0.7, ease: 'easeOut' }} />
+                    </div>
+                    <span className="text-xs font-semibold text-white/60 w-6 text-right">{b.value}</span>
+                  </div>
+                ))}
+                {strain.load_breakdown.activity_list.length > 0 && (
+                  <div className="pt-2 mt-1 border-t border-white/5 space-y-2">
+                    {strain.load_breakdown.activity_list.map((a, i) => (
+                      <div key={i} className="flex items-center justify-between">
+                        <div className="flex items-center gap-2">
+                          <div className="w-1.5 h-1.5 rounded-full bg-amber-400/60" />
+                          <span className="text-xs text-white/60 truncate max-w-[140px]">{a.name}</span>
+                        </div>
+                        <div className="flex items-center gap-2 text-xs text-white/40">
+                          {a.avg_hr && <span>{a.avg_hr} bpm</span>}
+                          <span>{formatDuration(a.duration_seconds)}</span>
+                          <span className="font-semibold text-amber-400">{a.strain}</span>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* HR zone breakdown */}
+            {zoneData.some(z => z.minutes > 0) && (
+              <div className="rounded-2xl bg-white/5 border border-white/8 p-4">
+                <p className="text-xs text-white/40 uppercase tracking-wider mb-4">HR zones today</p>
+                <div className="space-y-2">
+                  {zoneData.map(z => (
+                    <div key={z.label} className="flex items-center gap-3">
+                      <span className="text-xs text-white/40 w-5">{z.label}</span>
+                      <div className="flex-1 h-2.5 bg-white/10 rounded-full overflow-hidden">
+                        <motion.div className="h-full rounded-full"
+                          style={{ backgroundColor: z.color }}
+                          initial={{ width: 0 }}
+                          animate={{ width: `${(z.minutes / maxZone) * 100}%` }}
+                          transition={{ duration: 0.7, ease: 'easeOut' }} />
+                      </div>
+                      <span className="text-xs text-white/50 w-10 text-right">{z.minutes}m</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Workout prescriptions */}
+            {!alreadyHit && strain.prescriptions.length > 0 && (
+              <div>
+                <p className="text-xs text-white/40 uppercase tracking-wider mb-3">
+                  Workouts to hit your target
+                </p>
+                <div className="space-y-3">
+                  {strain.prescriptions.map((w, i) => (
+                    <WorkoutCard key={i} w={w} accent={accent} />
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {alreadyHit && (
+              <div className="rounded-2xl bg-green-500/10 border border-green-500/20 p-4 text-center">
+                <p className="text-green-400 font-semibold mb-1">Target reached 🎯</p>
+                <p className="text-sm text-white/50">You&apos;ve hit your strain target for today. Focus on recovery.</p>
+              </div>
+            )}
+
+            {/* Insight */}
+            <div className="rounded-2xl bg-white/5 border border-white/8 p-4">
+              <p className="text-xs text-white/40 uppercase tracking-wider mb-2">Insight</p>
+              <p className="text-sm text-white/70 leading-relaxed">{strain.insight}</p>
+            </div>
+          </div>
+        </motion.div>
+      </motion.div>
+    </AnimatePresence>
+  )
+}
+
 export default function OverviewPage() {
   const { data, loading, syncing, error, refresh } = useDashboard()
   const touchStartY = useRef(0)
   const [showSettings, setShowSettings] = useState(false)
   const [showTrainingLoad, setShowTrainingLoad] = useState(false)
+  const [showStrain, setShowStrain] = useState(false)
 
   const handleDisconnect = useCallback(async () => {
     await api.disconnectGarmin()
@@ -405,13 +650,16 @@ export default function OverviewPage() {
                     <div className="text-xs mt-0.5" style={{ color: scoreColor(data.recovery.score) }}>{scoreLabel(data.recovery.score)}</div>
                   </div>
                 </div>
-                <div className="flex flex-col items-center gap-2">
+                <button
+                  className="flex flex-col items-center gap-2 active:scale-95 transition-transform"
+                  onClick={() => setShowStrain(true)}
+                >
                   <ScoreRing score={data.strain.score} size={100} strokeWidth={8} />
                   <div className="text-center">
                     <div className="text-xs font-semibold text-white/50 uppercase tracking-widest">Strain</div>
                     <div className="text-xs mt-0.5 text-white/40">Target {data.strain.target}</div>
                   </div>
-                </div>
+                </button>
               </div>
             </GlassCard>
           </motion.div>
@@ -487,6 +735,9 @@ export default function OverviewPage() {
 
       {showTrainingLoad && data && (
         <TrainingLoadModal recovery={data.recovery} onClose={() => setShowTrainingLoad(false)} />
+      )}
+      {showStrain && data && (
+        <StrainModal strain={data.strain} onClose={() => setShowStrain(false)} />
       )}
     </div>
   )

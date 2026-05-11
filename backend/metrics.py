@@ -459,13 +459,127 @@ def calc_strain_score(target_date: date = None, recovery_score: int = 50) -> dic
 
         insight = _strain_insight(strain, target, zone_totals)
 
+        # Load breakdown — what contributed to today's strain
+        activity_strain = round(_clamp(((total_load - step_load - cal_load - stress_load) / MAX_LOAD) * 100))
+        load_breakdown = {
+            "activities": max(0, activity_strain),
+            "steps": round(_clamp((step_load / MAX_LOAD) * 100)),
+            "calories": round(_clamp((cal_load / MAX_LOAD) * 100)),
+            "stress": round(_clamp((stress_load / MAX_LOAD) * 100)),
+            "activity_list": [
+                {"name": dict(a)["name"], "type": dict(a)["type"],
+                 "strain": round(dict(a).get("strain") or 0),
+                 "duration_seconds": dict(a).get("duration_seconds") or 0,
+                 "avg_hr": dict(a).get("avg_hr")}
+                for a in activities
+            ],
+        }
+
+        # Workout prescriptions — what would hit the remaining target
+        remaining = max(0, target - round(strain))
+        prescriptions = _prescribe_workouts(remaining, rhr, max_hr)
+
         return {
             "score": round(strain),
             "target": target,
             "zones": {f"zone{z}_minutes": round(zone_totals[z] / 60) for z in range(1, 6)},
             "label": label,
             "insight": insight,
+            "load_breakdown": load_breakdown,
+            "prescriptions": prescriptions,
+            "remaining_to_target": remaining,
         }
+
+
+def _prescribe_workouts(remaining_strain: float, rhr: int, max_hr: int) -> list[dict]:
+    """Return workout options that would cover the remaining strain target."""
+    MAX_LOAD = 28800
+
+    def strain_for(duration_min: float, hr_reserve: float, mult: float) -> float:
+        trimp = duration_min * hr_reserve * 0.64 * math.exp(1.92 * hr_reserve)
+        return _clamp((trimp * 144 * mult / MAX_LOAD) * 100)
+
+    def hr_bpm(hr_reserve: float) -> int:
+        return round(rhr + hr_reserve * (max_hr - rhr))
+
+    def mins_to_hit(target_strain: float, hr_reserve: float, mult: float) -> Optional[int]:
+        if target_strain <= 0:
+            return 0
+        # strain_per_min at this hr_reserve
+        spm = strain_for(1, hr_reserve, mult)
+        if spm <= 0:
+            return None
+        mins = target_strain / spm
+        return round(mins) if mins <= 180 else None
+
+    workouts = []
+
+    # Easy run — Zone 2 (hr_reserve ~0.55)
+    hr2 = 0.55
+    dur2 = mins_to_hit(remaining_strain, hr2, 1.0)
+    if dur2 is not None:
+        workouts.append({
+            "type": "run", "label": "Easy run",
+            "zone": "Zone 2", "hr_reserve": hr2,
+            "avg_hr_bpm": hr_bpm(hr2),
+            "duration_minutes": dur2,
+            "strain": round(strain_for(dur2, hr2, 1.0)),
+            "description": "Conversational pace — you should be able to hold a full sentence",
+        })
+
+    # Moderate run — Zone 3 (hr_reserve ~0.70)
+    hr3 = 0.70
+    dur3 = mins_to_hit(remaining_strain, hr3, 1.0)
+    if dur3 is not None:
+        workouts.append({
+            "type": "run", "label": "Moderate run",
+            "zone": "Zone 3", "hr_reserve": hr3,
+            "avg_hr_bpm": hr_bpm(hr3),
+            "duration_minutes": dur3,
+            "strain": round(strain_for(dur3, hr3, 1.0)),
+            "description": "Comfortably hard — breathing elevated, short sentences only",
+        })
+
+    # Hard run — Zone 4 (hr_reserve ~0.82)
+    hr4 = 0.82
+    dur4 = mins_to_hit(remaining_strain, hr4, 1.0)
+    if dur4 is not None:
+        workouts.append({
+            "type": "run", "label": "Hard run / tempo",
+            "zone": "Zone 4", "hr_reserve": hr4,
+            "avg_hr_bpm": hr_bpm(hr4),
+            "duration_minutes": dur4,
+            "strain": round(strain_for(dur4, hr4, 1.0)),
+            "description": "Threshold effort — uncomfortable, single words only",
+        })
+
+    # Gym — strength training typically sits Zone 2–3 average (hr_reserve ~0.60)
+    hr_gym = 0.60
+    dur_gym = mins_to_hit(remaining_strain, hr_gym, 0.9)
+    if dur_gym is not None:
+        workouts.append({
+            "type": "gym", "label": "Gym / strength",
+            "zone": "Zone 2–3", "hr_reserve": hr_gym,
+            "avg_hr_bpm": hr_bpm(hr_gym),
+            "duration_minutes": dur_gym,
+            "strain": round(strain_for(dur_gym, hr_gym, 0.9)),
+            "description": "Compound lifts with moderate rest — keep HR steady throughout",
+        })
+
+    # Cycling — Zone 3 (hr_reserve ~0.68, mult 0.85)
+    hr_cy = 0.68
+    dur_cy = mins_to_hit(remaining_strain, hr_cy, 0.85)
+    if dur_cy is not None:
+        workouts.append({
+            "type": "cycling", "label": "Bike / cycle",
+            "zone": "Zone 3", "hr_reserve": hr_cy,
+            "avg_hr_bpm": hr_bpm(hr_cy),
+            "duration_minutes": dur_cy,
+            "strain": round(strain_for(dur_cy, hr_cy, 0.85)),
+            "description": "Steady endurance ride — maintain a consistent cadence",
+        })
+
+    return workouts
 
 
 def _strain_insight(strain: float, target: float, zones: dict) -> str:
