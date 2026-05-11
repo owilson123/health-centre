@@ -108,8 +108,8 @@ export const api = {
     lastPerformance: (exerciseId: number) =>
       get<LastPerformance>('/training/exercises/' + exerciseId + '/last-performance'),
 
-    getMaxes: () => get<{ bench_1rm: number | null; row_1rm: number | null; squat_1rm: number | null }>('/training/maxes'),
-    updateMaxes: (body: { bench_1rm?: number; row_1rm?: number; squat_1rm?: number }) =>
+    getMaxes: () => get<{ bench_1rm: number | null; row_5rm: number | null; squat_1rm: number | null }>('/training/maxes'),
+    updateMaxes: (body: { bench_1rm?: number; row_5rm?: number; squat_1rm?: number }) =>
       put('/training/maxes', body),
   },
 }

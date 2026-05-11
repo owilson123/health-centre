@@ -661,7 +661,7 @@ function SessionDetailSheet({ sid, onClose }: { sid: number; onClose: () => void
 // ─── Strength Profile (anchor maxes) ─────────────────────────────────────────
 
 function StrengthProfile() {
-  const [maxes, setMaxes] = useState<{ bench_1rm: number | null; row_1rm: number | null; squat_1rm: number | null } | null>(null)
+  const [maxes, setMaxes] = useState<{ bench_1rm: number | null; row_5rm: number | null; squat_1rm: number | null } | null>(null)
   const [editing, setEditing] = useState(false)
   const [bench, setBench] = useState('')
   const [row, setRow]     = useState('')
@@ -672,7 +672,7 @@ function StrengthProfile() {
     api.training.getMaxes().then(m => {
       setMaxes(m)
       setBench(m.bench_1rm ? String(m.bench_1rm) : '')
-      setRow(m.row_1rm     ? String(m.row_1rm)   : '')
+      setRow(m.row_5rm     ? String(m.row_5rm)   : '')
       setSquat(m.squat_1rm ? String(m.squat_1rm) : '')
     }).catch(() => {})
   }, [])
@@ -682,22 +682,21 @@ function StrengthProfile() {
     try {
       await api.training.updateMaxes({
         bench_1rm: bench ? parseFloat(bench) : undefined,
-        row_1rm:   row   ? parseFloat(row)   : undefined,
+        row_5rm:   row   ? parseFloat(row)   : undefined,
         squat_1rm: squat ? parseFloat(squat) : undefined,
       })
-      const updated = {
+      setMaxes({
         bench_1rm: bench ? parseFloat(bench) : null,
-        row_1rm:   row   ? parseFloat(row)   : null,
+        row_5rm:   row   ? parseFloat(row)   : null,
         squat_1rm: squat ? parseFloat(squat) : null,
-      }
-      setMaxes(updated)
+      })
       setEditing(false)
     } finally {
       setSaving(false)
     }
   }
 
-  const hasAny = maxes && (maxes.bench_1rm || maxes.row_1rm || maxes.squat_1rm)
+  const hasAny = maxes && (maxes.bench_1rm || maxes.row_5rm || maxes.squat_1rm)
 
   return (
     <div className="mx-4 mb-4 bg-white/5 rounded-2xl border border-white/8 overflow-hidden">
@@ -716,13 +715,13 @@ function StrengthProfile() {
       {!editing && hasAny && (
         <div className="flex px-4 pb-3 gap-4">
           {[
-            { label: 'Bench', val: maxes?.bench_1rm },
-            { label: 'Row',   val: maxes?.row_1rm },
-            { label: 'Squat', val: maxes?.squat_1rm },
+            { label: 'Bench 1RM', val: maxes?.bench_1rm },
+            { label: 'Row 5RM',   val: maxes?.row_5rm },
+            { label: 'Squat 1RM', val: maxes?.squat_1rm },
           ].map(({ label, val }) => (
             <div key={label} className="flex-1 text-center">
               <p className="text-base font-bold">{val ? `${val}` : '—'}</p>
-              <p className="text-[10px] text-white/30 mt-0.5">{label} 1RM kg</p>
+              <p className="text-[10px] text-white/30 mt-0.5">{label} kg</p>
             </div>
           ))}
         </div>
@@ -730,12 +729,15 @@ function StrengthProfile() {
 
       {editing && (
         <div className="px-4 pb-4 space-y-3">
-          <p className="text-xs text-white/40">Enter your estimated 1-rep maxes. These seed all DUP weight recommendations.</p>
+          <p className="text-xs text-white/40">
+            Enter your maxes — row uses 5RM (more practical), bench and squat use 1RM.
+            All DUP recommendations are calculated from these.
+          </p>
           {[
-            { label: 'Bench Press 1RM (kg)', val: bench, set: setBench },
-            { label: 'Barbell Row 1RM (kg)', val: row,   set: setRow },
-            { label: 'Squat 1RM (kg)',        val: squat, set: setSquat },
-          ].map(({ label, val, set }) => (
+            { label: 'Bench Press 1RM (kg)', val: bench, set: setBench, placeholder: 'e.g. 100' },
+            { label: 'Barbell Row 5RM (kg)', val: row,   set: setRow,   placeholder: 'e.g. 80' },
+            { label: 'Squat 1RM (kg)',        val: squat, set: setSquat, placeholder: 'e.g. 120' },
+          ].map(({ label, val, set, placeholder }) => (
             <div key={label}>
               <p className="text-xs text-white/40 mb-1">{label}</p>
               <input
@@ -743,7 +745,7 @@ function StrengthProfile() {
                 inputMode="decimal"
                 value={val}
                 onChange={e => set(e.target.value)}
-                placeholder="e.g. 100"
+                placeholder={placeholder}
                 className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-2.5 text-sm text-white outline-none focus:border-white/25"
               />
             </div>

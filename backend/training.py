@@ -669,7 +669,7 @@ ANCHOR_NAMES = ["Barbell Bench Press", "Barbell Row", "Squat"]
 
 class MaxesUpdate(BaseModel):
     bench_1rm:  Optional[float] = None
-    row_1rm:    Optional[float] = None
+    row_5rm:    Optional[float] = None   # user enters 5RM; we convert to 1RM internally
     squat_1rm:  Optional[float] = None
 
 
@@ -681,18 +681,23 @@ def get_maxes(_uid: str = Depends(get_current_user)):
             ANCHOR_NAMES
         ).fetchall()
     data = {r["exercise_name"]: r["one_rm_kg"] for r in rows}
+    # Back-convert row 1RM → 5RM for display: 5RM = 1RM / (1 + 5/30)
+    row_1rm = data.get("Barbell Row")
+    row_5rm = round(row_1rm / (1 + 5 / 30), 1) if row_1rm else None
     return {
         "bench_1rm": data.get("Barbell Bench Press"),
-        "row_1rm":   data.get("Barbell Row"),
+        "row_5rm":   row_5rm,
         "squat_1rm": data.get("Squat"),
     }
 
 
 @router.put("/maxes")
 def update_maxes(body: MaxesUpdate, _uid: str = Depends(get_current_user)):
+    # Convert row 5RM → 1RM using Epley before storing
+    row_1rm = round(body.row_5rm * (1 + 5 / 30), 1) if body.row_5rm and body.row_5rm > 0 else None
     mapping = {
         "Barbell Bench Press": body.bench_1rm,
-        "Barbell Row":         body.row_1rm,
+        "Barbell Row":         row_1rm,
         "Squat":               body.squat_1rm,
     }
     with db() as conn:
