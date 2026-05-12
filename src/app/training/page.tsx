@@ -619,11 +619,11 @@ function ExerciseCard({
 
       <div className="px-3 pt-2 pb-3">
         {/* Column headers */}
-        <div className="flex items-center gap-2 pb-1.5">
-          <span className="w-7 text-[10px] text-white/20 text-center flex-shrink-0">SET</span>
-          <span className="flex-1 text-[10px] text-white/20 text-center">WEIGHT</span>
+        <div className="flex items-center gap-2 pb-2">
+          <span className="w-7 text-[10px] text-white/40 text-center flex-shrink-0 font-semibold tracking-wider">SET</span>
+          <span className="flex-1 text-[10px] text-white/40 text-center font-semibold tracking-wider">WEIGHT</span>
           <span className="w-5 flex-shrink-0" />
-          <span className="w-14 text-[10px] text-white/20 text-center flex-shrink-0">REPS</span>
+          <span className="w-14 text-[10px] text-white/40 text-center flex-shrink-0 font-semibold tracking-wider">REPS</span>
           <span className="w-9 flex-shrink-0" />
         </div>
 
@@ -673,7 +673,7 @@ function SwipeableSetRow({
     <div className="relative rounded-xl overflow-hidden" style={{ isolation: 'isolate' }}>
       {/* Red delete layer behind the row */}
       <motion.div
-        className="absolute inset-0 bg-red-500 flex items-center justify-end pr-4 rounded-xl"
+        className="absolute inset-0 bg-red-500/90 flex items-center justify-end pr-4 rounded-xl"
         style={{ opacity: deleteOpacity }}
       >
         <Trash2 size={15} className="text-white" />
@@ -686,47 +686,76 @@ function SwipeableSetRow({
         dragMomentum={false}
         onDragEnd={(_, info) => { if (info.offset.x < -52) onDelete() }}
         style={{ x, scale: rowScale }}
-        className={`relative flex items-center gap-2 rounded-xl px-2.5 py-2.5 ${
-          s.saved ? 'bg-green-500/12 border border-green-500/20' : 'bg-white/6'
+        className={`relative flex items-center gap-2 rounded-xl px-2.5 py-2 ${
+          s.saved
+            ? 'bg-green-500/10 border border-green-500/25'
+            : 'bg-white/[0.05] border border-white/[0.08]'
         }`}
       >
-        <span className="w-7 text-xs text-white/30 text-center font-medium flex-shrink-0">
-          {s.set_number}
+        {/* Set number */}
+        {s.saved ? (
+          <div className="w-7 flex justify-center flex-shrink-0">
+            <div className="w-5 h-5 rounded-full bg-green-500/20 flex items-center justify-center">
+              <span className="text-[10px] font-bold text-green-400">{s.set_number}</span>
+            </div>
+          </div>
+        ) : (
+          <span className="w-7 text-xs text-white/50 text-center font-semibold flex-shrink-0">
+            {s.set_number}
+          </span>
+        )}
+
+        {/* Weight */}
+        {s.saved ? (
+          <span className="flex-1 text-sm font-semibold text-white text-center min-w-0">
+            {s.weight_kg || '—'}
+          </span>
+        ) : (
+          <input
+            type="text"
+            inputMode="decimal"
+            value={s.weight_kg}
+            onChange={e => onUpdate('weight_kg', e.target.value)}
+            placeholder="—"
+            className="flex-1 rounded-lg px-2 py-2 text-sm font-semibold text-white text-center outline-none min-w-0 bg-white/[0.07] border border-white/[0.12] focus:border-indigo-500/60 focus:bg-white/[0.1] placeholder-white/20 transition-colors"
+          />
+        )}
+
+        {/* Unit label */}
+        <span className={`text-[10px] flex-shrink-0 font-medium ${s.saved ? 'text-green-400/60' : 'text-white/30'}`}>
+          {kgLabel}
         </span>
-        <input
-          type="text"
-          inputMode="decimal"
-          value={s.weight_kg}
-          onChange={e => onUpdate('weight_kg', e.target.value)}
-          placeholder="—"
-          readOnly={s.saved}
-          className={`flex-1 rounded-lg px-2 py-1.5 text-sm text-white text-center outline-none min-w-0 ${
-            s.saved ? 'bg-transparent text-white/55' : 'bg-white/8 focus:bg-white/12'
-          }`}
-        />
-        <span className="text-[10px] text-white/20 flex-shrink-0">{kgLabel}</span>
-        <input
-          type="text"
-          inputMode="numeric"
-          value={s.reps}
-          onChange={e => onUpdate('reps', e.target.value)}
-          placeholder="0"
-          readOnly={s.saved}
-          className={`w-14 rounded-lg px-2 py-1.5 text-sm text-white text-center outline-none flex-shrink-0 ${
-            s.saved ? 'bg-transparent text-white/55' : 'bg-white/8 focus:bg-white/12'
-          }`}
-        />
+
+        {/* Reps */}
+        {s.saved ? (
+          <span className="w-14 text-sm font-semibold text-white text-center flex-shrink-0">
+            {s.reps}
+          </span>
+        ) : (
+          <input
+            type="text"
+            inputMode="numeric"
+            value={s.reps}
+            onChange={e => onUpdate('reps', e.target.value)}
+            placeholder="0"
+            className="w-14 rounded-lg px-2 py-2 text-sm font-semibold text-white text-center outline-none flex-shrink-0 bg-white/[0.07] border border-white/[0.12] focus:border-indigo-500/60 focus:bg-white/[0.1] placeholder-white/20 transition-colors"
+          />
+        )}
+
+        {/* Save / done indicator */}
         <div className="w-9 flex justify-center flex-shrink-0">
           {s.saved ? (
-            <Check size={14} className="text-green-400" />
+            <div className="w-7 h-7 rounded-full bg-green-500/20 border border-green-500/30 flex items-center justify-center">
+              <Check size={13} className="text-green-400" strokeWidth={2.5} />
+            </div>
           ) : (
             <button
               onPointerDown={e => e.stopPropagation()}
               onClick={onSave}
               disabled={!s.reps}
-              className="w-9 h-9 flex items-center justify-center text-white/30 active:text-green-400 disabled:opacity-20"
+              className="w-9 h-9 flex items-center justify-center rounded-xl text-white/40 active:text-green-400 active:bg-green-500/15 disabled:opacity-20 transition-colors"
             >
-              <Check size={16} />
+              <Check size={17} strokeWidth={2.5} />
             </button>
           )}
         </div>
