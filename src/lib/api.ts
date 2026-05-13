@@ -116,6 +116,8 @@ export const api = {
     getMaxes: () => get<{ bench_1rm: number | null; row_5rm: number | null; squat_1rm: number | null }>('/training/maxes'),
     updateMaxes: (body: { bench_1rm?: number; row_5rm?: number; squat_1rm?: number }) =>
       put('/training/maxes', body),
+
+    smartSuggest: () => get<SmartSuggest>('/training/smart-suggest'),
   },
 }
 
@@ -179,6 +181,28 @@ export interface DupRecommendation {
   anchor_name: string | null
   anchor_1rm: number | null
   note: string
+}
+
+export interface FreshnesEntry {
+  category: string
+  muscles: string[]
+  days_since: number | null
+  status: 'today' | 'yesterday' | 'recovering' | 'ready' | 'overdue' | 'never'
+  urgency: number
+  recovery_target_days: number
+}
+
+export interface SmartSuggest {
+  freshness: FreshnesEntry[]
+  priority_categories: string[]
+  this_week_categories: string[]
+  suggested_workout: {
+    name: string
+    reason: string
+    categories: string[]
+    template: { id: number; name: string; exercises: TrainingExercise[] } | null
+    exercises: TrainingExercise[]
+  }
 }
 
 export interface LastPerformance {

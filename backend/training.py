@@ -196,11 +196,16 @@ class SetLog(BaseModel):
 
 # ─── DUP recommendation engine ───────────────────────────────────────────────
 
-# Three DUP phases that cycle: Hypertrophy → Strength → Power → repeat
+# Three DUP phases that cycle: Hypertrophy → Strength → Power → repeat.
+# Percentages and rep ranges calibrated for intermediate-to-advanced strength
+# athletes (think: Prilepin / Zatsiorsky loading zones).
+# rir = Reps In Reserve target; rpe = Rate of Perceived Exertion target.
+# Pattern deliberately weights Strength: Hyp → Str → Str → Power → repeat (4-block).
 DUP_PHASES = [
-    {"name": "Hypertrophy", "sets": 4, "reps_low": 8,  "reps_high": 12, "pct": 0.68},
-    {"name": "Strength",    "sets": 4, "reps_low": 5,  "reps_high": 6,  "pct": 0.825},
-    {"name": "Power",       "sets": 5, "reps_low": 3,  "reps_high": 5,  "pct": 0.875},
+    {"name": "Hypertrophy", "sets": 4, "reps_low": 8,  "reps_high": 12, "pct": 0.675, "rir": 2, "rpe": "8"},
+    {"name": "Strength",    "sets": 5, "reps_low": 3,  "reps_high": 5,  "pct": 0.855, "rir": 1, "rpe": "9"},
+    {"name": "Strength",    "sets": 5, "reps_low": 3,  "reps_high": 5,  "pct": 0.875, "rir": 1, "rpe": "9"},
+    {"name": "Power",       "sets": 5, "reps_low": 2,  "reps_high": 3,  "pct": 0.905, "rir": 0, "rpe": "9-10"},
 ]
 
 # Anchor lift names for each category
@@ -362,10 +367,79 @@ DUMBBELL_PER_HAND = {
 
 
 def _epley_1rm(weight: float, reps: int) -> float:
-    """Epley formula: weight × (1 + reps/30)."""
+    """Epley formula: weight × (1 + reps/30). Accurate from 1–12 reps."""
     if reps == 1:
         return weight
     return weight * (1 + reps / 30)
+
+
+def _progressive_overload(
+    conn,
+    exercise_id: int,
+    exercise_name: str,
+    reps_low: int,
+    reps_high: int,
+) -> tuple[float | None, str, float | None]:
+    """
+    Analyse the user's last session for this exercise and suggest progressive
+    overload weight.  Returns (weight_kg, context_note, estimated_1rm) or
+    (None, "", None) if not enough history.
+
+    Rules (sports-science standard):
+    • Hit top of rep range on all sets → add weight
+      - Barbell compound: +2.5 kg
+      - Barbell isolation / cable / machine: +2.5 kg
+      - Dumbbell (per hand): +1.25 kg
+    • Hit bottom of rep range but not top → maintain (build reps first)
+    • Failed to reach bottom of rep range → micro-deload 5 %
+    • No history yet → return None (caller falls back to anchor scaling)
+    """
+    rows = conn.execute("""
+        SELECT ws.weight_kg, ws.reps, ws.session_id
+        FROM workout_sets ws
+        JOIN workout_sessions sess ON sess.id = ws.session_id
+        WHERE ws.exercise_id = ?
+          AND sess.finished_at IS NOT NULL
+          AND ws.weight_kg IS NOT NULL AND ws.weight_kg > 0
+          AND ws.reps > 0
+        ORDER BY sess.started_at DESC
+        LIMIT 30
+    """, (exercise_id,)).fetchall()
+
+    if not rows:
+        return None, "", None
+
+    # Isolate the most recent session's sets
+    last_sid = rows[0]["session_id"]
+    last_sets = [r for r in rows if r["session_id"] == last_sid]
+    if not last_sets:
+        return None, "", None
+
+    # Working weight = median weight across last session's sets
+    weights = sorted(r["weight_kg"] for r in last_sets)
+    last_weight = weights[len(weights) // 2]
+    avg_reps = sum(r["reps"] for r in last_sets) / len(last_sets)
+
+    # Best 1RM estimate from all history
+    all_sets = [r for r in rows if r["weight_kg"] and r["reps"]]
+    est_1rm = max((_epley_1rm(r["weight_kg"], r["reps"]) for r in all_sets), default=None)
+    if est_1rm:
+        est_1rm = round(est_1rm, 1)
+
+    per_hand = exercise_name in DUMBBELL_PER_HAND
+    increment = 1.25 if per_hand else 2.5
+
+    if avg_reps >= reps_high:
+        new_weight = _round_weight(last_weight + increment)
+        context = f"↑ {new_weight:g} kg — up {increment:g} kg (you hit {round(avg_reps)} reps last session)"
+    elif avg_reps >= reps_low:
+        new_weight = _round_weight(last_weight)
+        context = f"= {new_weight:g} kg — build reps to {reps_high} before adding weight"
+    else:
+        new_weight = _round_weight(last_weight * 0.95)
+        context = f"↓ {new_weight:g} kg — slight back-off (reps were short last session)"
+
+    return new_weight, context, est_1rm
 
 
 def _round_weight(kg: float) -> float:
@@ -416,16 +490,68 @@ def _dup_phase(conn, category: str) -> dict:
     return DUP_PHASES[n % len(DUP_PHASES)]
 
 
-def _dup_recommendation(conn, exercise_name: str, category: str) -> dict | None:
+def _dup_recommendation(
+    conn,
+    exercise_name: str,
+    category: str,
+    exercise_id: int | None = None,
+) -> dict | None:
     """
-    Build a full DUP recommendation for an exercise.
-    Returns None if no anchor data yet.
+    Build a DUP + progressive-overload recommendation for an exercise.
+
+    Priority order:
+    1. User has history for this specific exercise → progressive overload
+       (add/hold/deload based on reps hit last session).
+    2. No history yet → anchor-lift scaling (existing approach) so new
+       exercises still get a sensible first-session target.
+
+    Returns None only when there is genuinely no data and no anchor available.
     """
-    # Look up scale:
-    #  1. Exact match in SCALE dict (built-in exercises)
-    #  2. Similarity match within category (custom exercises)
-    #  3. Category default fallback
-    matched_from: str | None = None   # name of the matched exercise, if any
+    phase = _dup_phase(conn, category)
+    per_hand = exercise_name in DUMBBELL_PER_HAND
+
+    rir_note = (
+        f"RPE {phase['rpe']} · leave {phase['rir']} rep{'s' if phase['rir'] != 1 else ''} in reserve"
+        if phase["rir"] > 0
+        else f"RPE {phase['rpe']} · near-maximal effort"
+    )
+
+    # ── Path 1: Progressive overload from logged history ─────────────────────
+    if exercise_id is not None:
+        prog_weight, prog_context, est_1rm = _progressive_overload(
+            conn, exercise_id, exercise_name, phase["reps_low"], phase["reps_high"]
+        )
+        if prog_weight is not None:
+            return {
+                "phase":       phase["name"],
+                "sets":        phase["sets"],
+                "reps_low":    phase["reps_low"],
+                "reps_high":   phase["reps_high"],
+                "weight_kg":   prog_weight,
+                "per_hand":    per_hand,
+                "anchor_name": exercise_name,
+                "anchor_1rm":  est_1rm,
+                "note":        f"{prog_context} · {rir_note}",
+                "source":      "progressive_overload",
+            }
+
+    # ── Path 2: Bodyweight / Core — reps only ────────────────────────────────
+    if exercise_name in SCALE and SCALE[exercise_name] is None:
+        return {
+            "phase":       phase["name"],
+            "sets":        phase["sets"],
+            "reps_low":    phase["reps_low"],
+            "reps_high":   phase["reps_high"],
+            "weight_kg":   None,
+            "per_hand":    False,
+            "anchor_name": None,
+            "anchor_1rm":  None,
+            "note":        f"Quality reps · {rir_note}",
+            "source":      "bodyweight",
+        }
+
+    # ── Path 3: Anchor-lift scaling (first time with this exercise) ───────────
+    matched_from: str | None = None
 
     if exercise_name in SCALE:
         scale = SCALE[exercise_name]
@@ -437,52 +563,51 @@ def _dup_recommendation(conn, exercise_name: str, category: str) -> dict | None:
             scale = DEFAULT_CATEGORY_SCALE.get(category)
 
     if scale is None:
-        # Bodyweight / Core / no match — give reps-only recommendation
-        phase = _dup_phase(conn, category)
+        # Core / unscalable
         return {
-            "phase": phase["name"],
-            "sets": phase["sets"],
-            "reps_low": phase["reps_low"],
-            "reps_high": phase["reps_high"],
-            "weight_kg": None,
-            "per_hand": False,
+            "phase":       phase["name"],
+            "sets":        phase["sets"],
+            "reps_low":    phase["reps_low"],
+            "reps_high":   phase["reps_high"],
+            "weight_kg":   None,
+            "per_hand":    False,
             "anchor_name": None,
-            "anchor_1rm": None,
-            "note": "Focus on quality reps",
+            "anchor_1rm":  None,
+            "note":        f"Quality reps · {rir_note}",
+            "source":      "bodyweight",
         }
 
     anchor_name = ANCHOR.get(category, "")
     if not anchor_name:
-        return None   # Core — no recommendation
+        return None
 
     anchor_1rm = _best_1rm(conn, anchor_name)
 
-    # Fallback: if the exercise IS the anchor (e.g. user logs bench, no prior bench),
-    # try to get 1RM from the exercise itself
     if anchor_1rm is None and exercise_name != anchor_name:
-        anchor_1rm = _best_1rm(conn, exercise_name)
-        if anchor_1rm is not None:
-            # Reverse-scale to get implied anchor 1RM
-            anchor_1rm = anchor_1rm / scale
+        # Try reverse-scaling from this exercise's own history
+        own_1rm = _best_1rm(conn, exercise_name)
+        if own_1rm is not None:
+            anchor_1rm = own_1rm / scale
+
     if anchor_1rm is None:
-        # Check if THIS exercise is the anchor and has direct data
-        anchor_1rm = _best_1rm(conn, exercise_name)
-        if anchor_1rm is not None:
+        own_1rm = _best_1rm(conn, exercise_name)
+        if own_1rm is not None:
+            anchor_1rm = own_1rm
             anchor_name = exercise_name
         else:
-            return None  # No data yet — can't recommend
+            return None  # no data anywhere
 
-    phase = _dup_phase(conn, category)
-
-    # Target working weight at prescribed % of 1RM
-    target_total = anchor_1rm * scale * phase["pct"]
-
-    per_hand = exercise_name in DUMBBELL_PER_HAND
+    target_total   = anchor_1rm * scale * phase["pct"]
     display_weight = _round_weight(target_total / 2 if per_hand else target_total)
-
-    # Don't suggest a nonsensical weight
     if display_weight <= 0:
         return None
+
+    if matched_from:
+        basis = f"matched to {matched_from} · {anchor_name} est. 1RM {round(anchor_1rm)} kg"
+    elif anchor_name != exercise_name:
+        basis = f"based on {anchor_name} est. 1RM {round(anchor_1rm)} kg"
+    else:
+        basis = f"est. 1RM {round(anchor_1rm)} kg from your logs"
 
     return {
         "phase":       phase["name"],
@@ -493,15 +618,8 @@ def _dup_recommendation(conn, exercise_name: str, category: str) -> dict | None:
         "per_hand":    per_hand,
         "anchor_name": anchor_name,
         "anchor_1rm":  round(anchor_1rm, 1),
-        "note": (
-            f"Matched to {matched_from} · based on {anchor_name} {round(anchor_1rm)}kg"
-            if matched_from
-            else (
-                f"Based on {anchor_name} est. 1RM {round(anchor_1rm)}kg"
-                if anchor_name != exercise_name
-                else f"Based on your best estimated 1RM {round(anchor_1rm)}kg"
-            )
-        ),
+        "note":        f"First session target · {basis} · {rir_note}",
+        "source":      "anchor_scaling",
     }
 
 
@@ -890,10 +1008,12 @@ def last_performance(exercise_id: int, _uid: str = Depends(get_current_user)):
             set_list = [dict(s) for s in sets]
             session_date = session["started_at"][:10] if session else None
 
-        # DUP recommendation
+        # DUP recommendation — pass exercise_id so progressive overload is tried first
         recommendation = None
         if ex_row:
-            recommendation = _dup_recommendation(conn, ex_row["name"], ex_row["category"])
+            recommendation = _dup_recommendation(
+                conn, ex_row["name"], ex_row["category"], exercise_id=exercise_id
+            )
 
     summary = _fmt_performance([{**s, "exercise_id": exercise_id} for s in set_list]) if set_list else None
     return {
@@ -901,6 +1021,198 @@ def last_performance(exercise_id: int, _uid: str = Depends(get_current_user)):
         "sets": set_list,
         "session_date": session_date,
         "recommendation": recommendation,
+    }
+
+
+# ─── Smart workout suggestion ────────────────────────────────────────────────
+
+# Muscle groups within each category, in priority order
+CATEGORY_MUSCLES: dict[str, list[str]] = {
+    "Push": ["Chest", "Shoulders", "Triceps"],
+    "Pull": ["Back", "Biceps", "Rear Delts"],
+    "Legs": ["Quads", "Hamstrings", "Glutes", "Calves"],
+    "Arms": ["Biceps", "Triceps"],
+    "Core": ["Abs", "Core"],
+}
+
+# Recommended recovery window between sessions for each category (days)
+RECOVERY_DAYS: dict[str, int] = {
+    "Push": 2,
+    "Pull": 2,
+    "Legs": 3,   # Legs need more recovery
+    "Arms": 2,
+    "Core": 1,
+}
+
+# Representative "headline" exercises per category (for generating ad-hoc workouts)
+HEADLINE_EXERCISES: dict[str, list[str]] = {
+    "Push": ["Barbell Bench Press", "Overhead Press", "Incline Dumbbell Press", "Dip"],
+    "Pull": ["Deadlift", "Barbell Row", "Pull-Up", "Lat Pulldown", "Seated Cable Row"],
+    "Legs": ["Squat", "Romanian Deadlift", "Leg Press", "Bulgarian Split Squat", "Hip Thrust"],
+    "Arms": ["Barbell Curl", "Tricep Pushdown", "Hammer Curl", "Skull Crusher"],
+    "Core": ["Ab Wheel Rollout", "Hanging Leg Raise", "Plank", "Cable Crunch"],
+}
+
+
+@router.get("/smart-suggest")
+def smart_suggest(_uid: str = Depends(get_current_user)):
+    """
+    Analyse training history and return:
+    - Freshness score for each muscle category (days since last trained)
+    - Suggested workout targeting the most under-trained muscles
+    - This-week summary
+    """
+    from datetime import datetime, date as date_t, timedelta
+
+    today = date_t.today()
+
+    with db() as conn:
+        # ── When was each category last trained? ──────────────────────────────
+        rows = conn.execute("""
+            SELECT e.category, MAX(DATE(sess.started_at)) AS last_date
+            FROM workout_sets ws
+            JOIN exercises e  ON e.id  = ws.exercise_id
+            JOIN workout_sessions sess ON sess.id = ws.session_id
+            WHERE sess.finished_at IS NOT NULL
+            GROUP BY e.category
+        """).fetchall()
+
+        last_trained: dict[str, date_t] = {}
+        for r in rows:
+            try:
+                last_trained[r["category"]] = date_t.fromisoformat(r["last_date"])
+            except Exception:
+                pass
+
+        # ── Build freshness for all categories ───────────────────────────────
+        ALL_CATS = ["Push", "Pull", "Legs", "Arms", "Core"]
+        freshness = []
+        for cat in ALL_CATS:
+            if cat in last_trained:
+                days = (today - last_trained[cat]).days
+            else:
+                days = None   # never trained
+
+            rec = RECOVERY_DAYS.get(cat, 2)
+            if days is None:
+                status = "never"
+                urgency = 5
+            elif days == 0:
+                status = "today"
+                urgency = 0
+            elif days == 1:
+                status = "yesterday"
+                urgency = 1
+            elif days < rec:
+                status = "recovering"
+                urgency = 2
+            elif days == rec:
+                status = "ready"
+                urgency = 3
+            else:
+                status = "overdue"
+                urgency = 4 + min(days - rec, 3)   # more overdue = higher urgency
+
+            freshness.append({
+                "category":    cat,
+                "muscles":     CATEGORY_MUSCLES[cat],
+                "days_since":  days,
+                "status":      status,
+                "urgency":     urgency,
+                "recovery_target_days": rec,
+            })
+
+        freshness.sort(key=lambda f: -f["urgency"])
+
+        # ── This-week categories ──────────────────────────────────────────────
+        week_start = today - timedelta(days=today.weekday())
+        week_rows = conn.execute("""
+            SELECT DISTINCT e.category
+            FROM workout_sets ws
+            JOIN exercises e  ON e.id  = ws.exercise_id
+            JOIN workout_sessions sess ON sess.id = ws.session_id
+            WHERE sess.finished_at IS NOT NULL
+              AND DATE(sess.started_at) >= ?
+        """, (week_start.isoformat(),)).fetchall()
+        this_week_cats = [r["category"] for r in week_rows]
+
+        # ── Build suggested workout from most overdue categories ──────────────
+        priority = [f["category"] for f in freshness if f["urgency"] >= 3][:2]
+        if not priority:
+            # Everything trained recently — suggest the category trained longest ago
+            priority = [freshness[0]["category"]] if freshness else ["Push"]
+
+        # Check if any template matches the priority categories
+        template_match = None
+        if priority:
+            ph = ",".join("?" * len(priority))
+            t_row = conn.execute(f"""
+                SELECT wt.id, wt.name, COUNT(DISTINCT e.category) as cat_count
+                FROM workout_templates wt
+                JOIN template_exercises te ON te.template_id = wt.id
+                JOIN exercises e ON e.id = te.exercise_id
+                WHERE e.category IN ({ph})
+                GROUP BY wt.id
+                ORDER BY cat_count DESC, wt.id DESC
+                LIMIT 1
+            """, priority).fetchone()
+            if t_row:
+                exs = conn.execute("""
+                    SELECT e.id, e.name, e.category, e.equipment
+                    FROM template_exercises te
+                    JOIN exercises e ON e.id = te.exercise_id
+                    WHERE te.template_id = ? ORDER BY te.position
+                """, (t_row["id"],)).fetchall()
+                template_match = {
+                    "id": t_row["id"],
+                    "name": t_row["name"],
+                    "exercises": [dict(e) for e in exs],
+                }
+
+        # Ad-hoc exercise suggestions for priority categories
+        suggested_exercises = []
+        seen_names: set[str] = set()
+        for cat in priority:
+            for name in HEADLINE_EXERCISES.get(cat, []):
+                if name not in seen_names:
+                    ex = conn.execute(
+                        "SELECT id, name, category, equipment FROM exercises WHERE name=?", (name,)
+                    ).fetchone()
+                    if ex:
+                        suggested_exercises.append(dict(ex))
+                        seen_names.add(name)
+
+        # Workout name + reason
+        overdue_labels = [f["category"] for f in freshness if f["urgency"] >= 4]
+        ready_labels   = [f["category"] for f in freshness if f["urgency"] == 3]
+
+        if overdue_labels:
+            days_ago = next(
+                (f["days_since"] for f in freshness if f["category"] == overdue_labels[0]), None
+            )
+            reason = (
+                f"{' + '.join(overdue_labels)} — "
+                f"{'not trained in ' + str(days_ago) + ' days' if days_ago else 'never trained'}"
+            )
+            workout_name = f"{' & '.join(overdue_labels)} Day"
+        elif ready_labels:
+            reason = f"{' + '.join(ready_labels)} — fully recovered and ready"
+            workout_name = f"{' & '.join(ready_labels)} Day"
+        else:
+            reason = "Everything trained recently — here's your next session"
+            workout_name = f"{priority[0]} Day" if priority else "Workout"
+
+    return {
+        "freshness":           freshness,
+        "priority_categories": priority,
+        "this_week_categories": this_week_cats,
+        "suggested_workout": {
+            "name":       workout_name,
+            "reason":     reason,
+            "categories": priority,
+            "template":   template_match,
+            "exercises":  suggested_exercises,
+        },
     }
 
 

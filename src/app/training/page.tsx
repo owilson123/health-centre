@@ -5,9 +5,9 @@ import { motion, AnimatePresence, useMotionValue, useTransform, Reorder, useDrag
 import {
   Plus, X, ChevronRight, Dumbbell, Clock,
   Search, Check, ChevronDown, Trash2, Play, RotateCcw,
-  Trophy, Weight, Flame, Zap, GripVertical
+  Trophy, Weight, Flame, Zap, GripVertical, Sparkles, Brain
 } from 'lucide-react'
-import { api, WorkoutTemplate, TrainingExercise, SessionDetail, SessionSummary, LastPerformance } from '@/lib/api'
+import { api, WorkoutTemplate, TrainingExercise, SessionDetail, SessionSummary, LastPerformance, SmartSuggest } from '@/lib/api'
 
 // ─── Utility ──────────────────────────────────────────────────────────────────
 
@@ -598,21 +598,26 @@ function ExerciseCard({
         </button>
       </div>
 
-      {/* DUP recommendation + last performance */}
-      {(rec || lastP?.summary) && (
-        <div className="flex items-center gap-3 px-3 py-2 border-b border-white/5">
-          {rec && (
-            <div className={`flex items-center gap-1.5 flex-1 min-w-0 ${PHASE_STYLE[rec.phase]?.text ?? 'text-white/40'}`}>
-              <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${PHASE_STYLE[rec.phase]?.dot ?? 'bg-white/30'}`} />
-              <span className="text-[11px] font-semibold uppercase tracking-wide">{rec.phase}</span>
-              <span className="text-[11px] text-white/50">
-                {rec.sets}×{rec.reps_low}{rec.reps_low !== rec.reps_high ? `–${rec.reps_high}` : ''}
-                {rec.weight_kg ? ` @ ${rec.weight_kg}kg` : ''}
-              </span>
-            </div>
-          )}
-          {lastP?.summary && (
-            <span className="text-[11px] text-white/30 truncate flex-shrink-0">Last: {lastP.summary}</span>
+      {/* Recommendation block */}
+      {rec && (
+        <div className={`px-3 py-2.5 border-b border-white/5 ${PHASE_STYLE[rec.phase]?.bg ?? 'bg-white/5'}`}>
+          {/* Phase + prescription */}
+          <div className="flex items-center gap-2 mb-1">
+            <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${PHASE_STYLE[rec.phase]?.dot ?? 'bg-white/30'}`} />
+            <span className={`text-[11px] font-bold uppercase tracking-widest ${PHASE_STYLE[rec.phase]?.text ?? 'text-white/50'}`}>
+              {rec.phase}
+            </span>
+            <span className={`text-[11px] font-semibold ${PHASE_STYLE[rec.phase]?.text ?? 'text-white/50'}`}>
+              {rec.sets}×{rec.reps_low}{rec.reps_low !== rec.reps_high ? `–${rec.reps_high}` : ''}
+              {rec.weight_kg ? ` @ ${rec.weight_kg} ${rec.per_hand ? 'kg/hand' : 'kg'}` : ' reps'}
+            </span>
+            {lastP?.summary && (
+              <span className="text-[10px] text-white/30 ml-auto truncate">Last: {lastP.summary}</span>
+            )}
+          </div>
+          {/* Progressive overload / basis note */}
+          {rec.note && (
+            <p className="text-[10px] text-white/40 leading-relaxed">{rec.note}</p>
           )}
         </div>
       )}
@@ -1251,6 +1256,9 @@ export default function TrainingPage() {
   const [activeSession, setActiveSession] = useState<{ session_id: number; name: string; exercises: TrainingExercise[] } | null>(null)
   const [detailSid, setDetailSid] = useState<number | null>(null)
   const [showQuickStart, setShowQuickStart] = useState(false)
+  const [quickStartTab, setQuickStartTab] = useState<'routines' | 'smart'>('routines')
+  const [smartData, setSmartData] = useState<SmartSuggest | null>(null)
+  const [smartLoading, setSmartLoading] = useState(false)
 
   const loadData = useCallback(async () => {
     setLoading(true)
@@ -1268,9 +1276,35 @@ export default function TrainingPage() {
 
   useEffect(() => { loadData() }, [loadData])
 
+  const openQuickStart = () => {
+    setShowQuickStart(true)
+    setSmartLoading(true)
+    api.training.smartSuggest()
+      .then(setSmartData)
+      .catch(() => {})
+      .finally(() => setSmartLoading(false))
+  }
+
   const startFromTemplate = async (t: WorkoutTemplate) => {
     const res = await api.training.startSession({ template_id: t.id })
     setActiveSession(res)
+    setShowQuickStart(false)
+  }
+
+  const startFromSuggestedTemplate = async () => {
+    if (!smartData?.suggested_workout.template) return
+    const t = smartData.suggested_workout.template
+    const res = await api.training.startSession({ template_id: t.id })
+    setActiveSession(res)
+    setShowQuickStart(false)
+  }
+
+  const startFromSuggestedExercises = async () => {
+    if (!smartData) return
+    const w = smartData.suggested_workout
+    const res = await api.training.startSession({ name: w.name })
+    // Add suggested exercises
+    setActiveSession({ ...res, exercises: w.exercises })
     setShowQuickStart(false)
   }
 
@@ -1296,7 +1330,7 @@ export default function TrainingPage() {
             <p className="text-sm text-white/40 mt-0.5">Track your workouts</p>
           </div>
           <button
-            onClick={() => setShowQuickStart(true)}
+            onClick={openQuickStart}
             className="flex items-center gap-2 px-4 py-2.5 bg-indigo-500 rounded-2xl text-sm font-semibold active:scale-95 transition-transform"
           >
             <Play size={14} />
@@ -1419,14 +1453,14 @@ export default function TrainingPage() {
         </div>
       )}
 
-      {/* Quick start overlay — z-[60] so it sits above the nav (z-50) */}
+      {/* Quick start overlay */}
       <AnimatePresence>
         {showQuickStart && (
           <motion.div
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
-            className="fixed inset-0 z-[60] bg-black/70 flex items-end"
+            className="fixed inset-0 z-[60] bg-black/75 flex items-end"
             onClick={() => setShowQuickStart(false)}
           >
             <motion.div
@@ -1435,32 +1469,187 @@ export default function TrainingPage() {
               exit={{ y: '100%' }}
               transition={{ type: 'spring', damping: 28, stiffness: 300 }}
               onClick={e => e.stopPropagation()}
-              className="w-full bg-[#141414] rounded-t-3xl border-t border-white/10"
+              className="w-full bg-[#141414] rounded-t-3xl border-t border-white/10 max-h-[85vh] flex flex-col"
               style={{ paddingBottom: 'calc(env(safe-area-inset-bottom) + 1.5rem)' }}
             >
-              <div className="px-6 pt-6 pb-2">
+              {/* Handle + header */}
+              <div className="flex-shrink-0 px-5 pt-5 pb-3">
                 <div className="w-10 h-1 bg-white/15 rounded-full mx-auto mb-5" />
-                <h3 className="text-lg font-semibold mb-4">Start Workout</h3>
+                <div className="flex items-center justify-between mb-4">
+                  <h3 className="text-lg font-bold">Start Workout</h3>
+                  {/* Tab pills */}
+                  <div className="flex gap-1 bg-white/[0.06] p-1 rounded-2xl">
+                    {(['routines', 'smart'] as const).map(t => (
+                      <button
+                        key={t}
+                        onClick={() => setQuickStartTab(t)}
+                        className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold transition-all ${
+                          quickStartTab === t
+                            ? t === 'smart'
+                              ? 'bg-violet-500 text-white'
+                              : 'bg-white/10 text-white'
+                            : 'text-white/35'
+                        }`}
+                      >
+                        {t === 'smart' ? <><Sparkles size={11} />Smart</> : <>Routines</>}
+                      </button>
+                    ))}
+                  </div>
+                </div>
               </div>
-              <div className="px-4 space-y-2 mb-3">
-                {templates.map(t => (
-                  <button
-                    key={t.id}
-                    onClick={() => startFromTemplate(t)}
-                    className="w-full flex items-center justify-between bg-white/6 rounded-2xl px-4 py-3.5 active:bg-white/10"
-                  >
-                    <div className="text-left">
-                      <p className="text-sm font-medium text-white">{t.name}</p>
-                      <p className="text-xs text-white/40 mt-0.5">{t.exercises.length} exercises</p>
-                    </div>
-                    <ChevronRight size={16} className="text-white/30" />
-                  </button>
-                ))}
+
+              {/* Tab content */}
+              <div className="flex-1 overflow-y-auto px-4">
+                <AnimatePresence mode="wait">
+                  {quickStartTab === 'routines' ? (
+                    <motion.div
+                      key="routines"
+                      initial={{ opacity: 0, x: -10 }}
+                      animate={{ opacity: 1, x: 0 }}
+                      exit={{ opacity: 0, x: -10 }}
+                      transition={{ duration: 0.15 }}
+                      className="space-y-2 pb-2"
+                    >
+                      {templates.length === 0 && (
+                        <p className="text-sm text-white/30 text-center py-6">
+                          No routines yet — create one in My Routines
+                        </p>
+                      )}
+                      {templates.map(t => (
+                        <button
+                          key={t.id}
+                          onClick={() => startFromTemplate(t)}
+                          className="w-full flex items-center justify-between bg-white/[0.06] rounded-2xl px-4 py-3.5 active:bg-white/10"
+                        >
+                          <div className="text-left">
+                            <p className="text-sm font-semibold text-white">{t.name}</p>
+                            <p className="text-xs text-white/40 mt-0.5">{t.exercises.length} exercises</p>
+                          </div>
+                          <ChevronRight size={16} className="text-white/30" />
+                        </button>
+                      ))}
+                    </motion.div>
+                  ) : (
+                    <motion.div
+                      key="smart"
+                      initial={{ opacity: 0, x: 10 }}
+                      animate={{ opacity: 1, x: 0 }}
+                      exit={{ opacity: 0, x: 10 }}
+                      transition={{ duration: 0.15 }}
+                      className="pb-2"
+                    >
+                      {smartLoading ? (
+                        <div className="space-y-3 py-2">
+                          <div className="h-20 bg-white/[0.04] rounded-2xl animate-pulse" />
+                          <div className="h-32 bg-white/[0.04] rounded-2xl animate-pulse" />
+                        </div>
+                      ) : smartData ? (
+                        <>
+                          {/* Suggested workout card */}
+                          <div className="bg-violet-500/10 border border-violet-500/20 rounded-2xl p-4 mb-4">
+                            <div className="flex items-center gap-2 mb-1">
+                              <Brain size={14} className="text-violet-400 flex-shrink-0" />
+                              <p className="text-xs font-semibold text-violet-300 uppercase tracking-wider">Suggested for you</p>
+                            </div>
+                            <p className="text-base font-bold text-white mb-0.5">{smartData.suggested_workout.name}</p>
+                            <p className="text-xs text-white/45 mb-3">{smartData.suggested_workout.reason}</p>
+
+                            {/* Exercise preview */}
+                            <div className="flex flex-wrap gap-1.5 mb-3">
+                              {smartData.suggested_workout.exercises.slice(0, 5).map(ex => (
+                                <span key={ex.id} className="text-[11px] bg-white/8 text-white/60 px-2 py-0.5 rounded-lg">
+                                  {ex.name}
+                                </span>
+                              ))}
+                              {smartData.suggested_workout.exercises.length > 5 && (
+                                <span className="text-[11px] text-white/30 px-1">
+                                  +{smartData.suggested_workout.exercises.length - 5} more
+                                </span>
+                              )}
+                            </div>
+
+                            {/* CTA */}
+                            {smartData.suggested_workout.template ? (
+                              <button
+                                onClick={startFromSuggestedTemplate}
+                                className="w-full py-3 bg-violet-500 rounded-xl text-sm font-bold text-white active:bg-violet-600"
+                              >
+                                Start {smartData.suggested_workout.template.name}
+                              </button>
+                            ) : (
+                              <button
+                                onClick={startFromSuggestedExercises}
+                                className="w-full py-3 bg-violet-500 rounded-xl text-sm font-bold text-white active:bg-violet-600"
+                              >
+                                Start {smartData.suggested_workout.name}
+                              </button>
+                            )}
+                          </div>
+
+                          {/* Muscle freshness grid */}
+                          <p className="text-[10px] font-bold uppercase tracking-wider text-white/25 mb-2">Muscle freshness</p>
+                          <div className="space-y-2 mb-4">
+                            {smartData.freshness.map(f => {
+                              const pct = f.days_since === null
+                                ? 100
+                                : Math.min(100, (f.days_since / (f.recovery_target_days * 2)) * 100)
+                              const barColor =
+                                f.status === 'today' || f.status === 'yesterday' || f.status === 'recovering'
+                                  ? '#22c55e'
+                                  : f.status === 'ready'
+                                  ? '#6366f1'
+                                  : '#ef4444'
+                              const labelColor =
+                                f.status === 'today' || f.status === 'yesterday' ? 'text-green-400' :
+                                f.status === 'recovering' ? 'text-green-400/70' :
+                                f.status === 'ready' ? 'text-indigo-400' :
+                                f.status === 'overdue' ? 'text-red-400' : 'text-white/30'
+
+                              return (
+                                <div key={f.category}>
+                                  <div className="flex items-center justify-between mb-1">
+                                    <div className="flex items-center gap-2">
+                                      <span className="text-xs font-semibold text-white/70 w-10">{f.category}</span>
+                                      <span className="text-[10px] text-white/30">{f.muscles.join(' · ')}</span>
+                                    </div>
+                                    <span className={`text-[10px] font-semibold ${labelColor}`}>
+                                      {f.status === 'never' ? 'Never trained' :
+                                       f.status === 'today' ? 'Trained today' :
+                                       f.status === 'yesterday' ? 'Yesterday' :
+                                       f.status === 'recovering' ? `${f.days_since}d — recovering` :
+                                       f.status === 'ready' ? `${f.days_since}d — ready` :
+                                       `${f.days_since}d — overdue`}
+                                    </span>
+                                  </div>
+                                  <div className="h-1.5 bg-white/[0.06] rounded-full overflow-hidden">
+                                    <motion.div
+                                      className="h-full rounded-full"
+                                      initial={{ width: 0 }}
+                                      animate={{ width: `${pct}%` }}
+                                      transition={{ duration: 0.6, ease: 'easeOut' }}
+                                      style={{ backgroundColor: barColor }}
+                                    />
+                                  </div>
+                                </div>
+                              )
+                            })}
+                          </div>
+                        </>
+                      ) : (
+                        <p className="text-sm text-white/30 text-center py-8">
+                          Start logging workouts to get smart suggestions
+                        </p>
+                      )}
+                    </motion.div>
+                  )}
+                </AnimatePresence>
               </div>
-              <div className="px-4">
+
+              {/* Empty workout footer */}
+              <div className="flex-shrink-0 px-4 pt-3">
                 <button
                   onClick={startQuick}
-                  className="w-full py-3.5 bg-indigo-500 rounded-2xl text-sm font-semibold active:bg-indigo-600"
+                  className="w-full py-3.5 bg-white/[0.07] border border-white/10 rounded-2xl text-sm font-semibold text-white/60 active:bg-white/10"
                 >
                   Empty Workout
                 </button>
