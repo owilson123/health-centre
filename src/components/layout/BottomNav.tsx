@@ -2,14 +2,14 @@
 
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
-import { Home, Moon, Activity, Flame, Dumbbell } from 'lucide-react'
+import { Home, Moon, Activity, CalendarDays, Dumbbell } from 'lucide-react'
 import { cn } from '@/lib/utils'
 
 const tabs = [
   { href: '/',           label: 'Overview',   icon: Home },
   { href: '/sleep',      label: 'Sleep',      icon: Moon },
   { href: '/activities', label: 'Activities', icon: Activity },
-  { href: '/calories',   label: 'Calories',   icon: Flame },
+  { href: '/calendar',   label: 'Calendar',   icon: CalendarDays },
   { href: '/training',   label: 'Training',   icon: Dumbbell },
 ]
 
