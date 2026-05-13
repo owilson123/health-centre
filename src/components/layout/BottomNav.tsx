@@ -18,20 +18,18 @@ export function BottomNav() {
 
   return (
     <>
-      {/*
-        Flood-fill the iPhone home-indicator zone with the same
-        background so there's no colour mismatch below the bar.
-      */}
+      {/* Flood-fill below home indicator */}
       <div
-        className="fixed bottom-0 left-0 right-0 z-40 bg-[#0e0e0e]"
+        className="fixed bottom-0 left-0 right-0 z-40 bg-[#0c0c0c]"
         style={{ height: 'env(safe-area-inset-bottom)' }}
         aria-hidden
       />
 
-      {/* The actual tab bar — sits above the flood-fill */}
-      <nav className="fixed bottom-0 left-0 right-0 z-50 bg-[#0e0e0e] border-t border-white/[0.07]"
-           style={{ paddingBottom: 'env(safe-area-inset-bottom)' }}>
-        <div className="flex items-stretch h-[54px]">
+      <nav
+        className="fixed bottom-0 left-0 right-0 z-50 bg-[#0c0c0c]/95 backdrop-blur-xl border-t border-white/[0.06]"
+        style={{ paddingBottom: 'env(safe-area-inset-bottom)' }}
+      >
+        <div className="flex items-stretch h-[64px] px-1">
           {tabs.map(({ href, label, icon: Icon }) => {
             const active = pathname === href
             return (
@@ -40,23 +38,34 @@ export function BottomNav() {
                 href={href}
                 prefetch
                 className={cn(
-                  'relative flex flex-col items-center justify-center flex-1 gap-[3px]',
-                  'transition-colors duration-150',
-                  active ? 'text-white' : 'text-white/30'
+                  'relative flex flex-col items-center justify-center flex-1 gap-1 rounded-2xl mx-0.5 my-1.5 transition-all duration-200 active:scale-90',
+                  active ? 'text-white' : 'text-white/35'
                 )}
               >
-                {/* Active pill indicator */}
+                {/* Active background pill */}
                 {active && (
-                  <span className="absolute top-0 left-1/2 -translate-x-1/2 w-8 h-[2px] rounded-full bg-indigo-400" />
+                  <span className="absolute inset-0 rounded-2xl bg-white/[0.08]" />
                 )}
-                <Icon
-                  size={active ? 20 : 21}
-                  strokeWidth={active ? 2.2 : 1.6}
-                  className="transition-all duration-150"
-                />
+
+                {/* Icon container */}
                 <span className={cn(
-                  'text-[10px] tracking-wide transition-all duration-150',
-                  active ? 'font-semibold' : 'font-normal'
+                  'relative z-10 flex items-center justify-center rounded-xl transition-all duration-200',
+                  active ? 'w-10 h-7 bg-indigo-500/20' : 'w-8 h-6'
+                )}>
+                  <Icon
+                    size={active ? 19 : 20}
+                    strokeWidth={active ? 2.3 : 1.6}
+                    className={cn(
+                      'transition-all duration-200',
+                      active ? 'text-indigo-400' : 'text-white/35'
+                    )}
+                  />
+                </span>
+
+                {/* Label */}
+                <span className={cn(
+                  'relative z-10 text-[10px] tracking-wide transition-all duration-200 leading-none',
+                  active ? 'font-bold text-white' : 'font-normal text-white/35'
                 )}>
                   {label}
                 </span>
