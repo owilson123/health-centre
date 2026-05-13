@@ -11,7 +11,7 @@ from pydantic import BaseModel
 
 from database import init_db, db, _current_user
 from auth import get_current_user, make_token, USERS, _hash
-from garmin_sync import sync_all, test_credentials, get_stored_credentials, reset_client
+from garmin_sync import sync_all, test_credentials, get_stored_credentials, reset_client, _clients as _garmin_clients
 from metrics import calc_sleep_score, calc_recovery_score, calc_strain_score, calc_calories
 from training import router as training_router, init_training_db
 
@@ -70,9 +70,9 @@ class GarminCredentials(BaseModel):
 
 @app.get("/auth/status")
 def auth_status(user_id: str = Depends(get_current_user)):
-    creds = get_stored_credentials()
+    creds = get_stored_credentials(user_id)
     if creds:
-        with db() as conn:
+        with db(user_id) as conn:
             row = conn.execute("SELECT connected_at FROM credentials WHERE id=1").fetchone()
         return {"connected": True, "email": creds[0], "connected_at": row[0] if row else None}
     return {"connected": False}
@@ -85,20 +85,20 @@ def connect_garmin(
     user_id: str = Depends(get_current_user),
 ):
     try:
-        verified_client = test_credentials(creds.email, creds.password)
+        verified_client = test_credentials(creds.email, creds.password, user_id)
     except Exception as e:
         logger.error(f"[{user_id}] Garmin login failed: {type(e).__name__}: {e}")
         raise HTTPException(status_code=401, detail=f"Garmin login failed: {type(e).__name__}: {str(e)}")
 
-    import garmin_sync
-    garmin_sync._clients[user_id] = verified_client
+    # Cache the just-verified client so the first sync doesn't have to re-login
+    _garmin_clients[user_id] = verified_client
 
     # Wipe all previously synced health data before saving new credentials.
     # This guarantees the user only ever sees data from the account they just
     # connected — no stale data from a previous account or from a credential leak.
     _HEALTH_TABLES = ["sleep", "hrv", "body_battery", "stress", "steps",
                       "activities", "user_profile", "sync_log"]
-    with db() as conn:
+    with db(user_id) as conn:
         for t in _HEALTH_TABLES:
             try:
                 conn.execute(f"DELETE FROM {t}")
@@ -112,18 +112,17 @@ def connect_garmin(
                 garmin_password=excluded.garmin_password,
                 connected_at=excluded.connected_at
         """, (creds.email, creds.password))
-    logger.info(f"[{user_id}] Health data wiped before connecting {creds.email}")
+    logger.info(f"[{user_id}] Garmin connected as {creds.email} — health data wiped for fresh sync")
 
-    reset_client()
     background_tasks.add_task(_do_sync, user_id)
     return {"status": "connected", "email": creds.email}
 
 
 @app.post("/auth/disconnect")
 def disconnect_garmin(user_id: str = Depends(get_current_user)):
-    with db() as conn:
+    with db(user_id) as conn:
         conn.execute("DELETE FROM credentials WHERE id=1")
-    reset_client()
+    reset_client(user_id)
     return {"status": "disconnected"}
 
 
@@ -131,7 +130,7 @@ def disconnect_garmin(user_id: str = Depends(get_current_user)):
 
 @app.get("/admin/clear-sleep")
 def clear_sleep_data(user_id: str = Depends(get_current_user)):
-    with db() as conn:
+    with db(user_id) as conn:
         conn.execute("DELETE FROM sleep")
         conn.execute("DELETE FROM sync_log")
     return {"status": "cleared", "message": "Sleep data wiped. Pull to refresh on the app to re-sync."}
@@ -144,14 +143,13 @@ def wipe_all_data(user_id: str = Depends(get_current_user)):
         "sleep", "hrv", "body_battery", "stress", "steps",
         "activities", "user_profile", "sync_log", "credentials",
     ]
-    with db() as conn:
+    with db(user_id) as conn:
         for t in tables:
             try:
                 conn.execute(f"DELETE FROM {t}")
             except Exception:
                 pass  # table may not exist on older schemas
-    import garmin_sync
-    garmin_sync._clients[user_id] = None
+    reset_client(user_id)
     logger.info(f"[{user_id}] All health data wiped by user request")
     return {"status": "wiped", "user": user_id, "tables_cleared": tables}
 
@@ -161,14 +159,14 @@ def recalculate_strain(days: int = 90, user_id: str = Depends(get_current_user))
     from garmin_sync import _backfill_strain
     end = date.today()
     start = end - timedelta(days=days)
-    _backfill_strain(start, end)
+    _backfill_strain(user_id, start, end)
     return {"status": "done", "message": f"Strain recalculated for {days} days ending {end}"}
 
 
 # ─── sync ─────────────────────────────────────────────────────────────────────
 
-def _should_sync() -> bool:
-    with db() as conn:
+def _should_sync(user_id: str) -> bool:
+    with db(user_id) as conn:
         row = conn.execute(
             "SELECT synced_at FROM sync_log WHERE status='ok' ORDER BY synced_at DESC LIMIT 1"
         ).fetchone()
@@ -185,12 +183,13 @@ def trigger_sync(background_tasks: BackgroundTasks, user_id: str = Depends(get_c
 
 
 def _do_sync(user_id: str):
+    # Also set ContextVar so metrics.py (which still uses it internally) routes correctly
     _current_user.set(user_id)
     try:
-        sync_all(days=90)
+        sync_all(user_id, days=90)
     except Exception as e:
         logger.error(f"[{user_id}] Sync failed: {e}")
-        with db() as conn:
+        with db(user_id) as conn:
             conn.execute("INSERT INTO sync_log (status, message) VALUES (?, ?)", ("error", str(e)))
 
 
@@ -198,15 +197,18 @@ def _do_sync(user_id: str):
 
 @app.get("/dashboard")
 def get_dashboard(user_id: str = Depends(get_current_user)):
-    if _should_sync():
+    # Also set ContextVar so metrics.py (which still uses it internally) routes correctly
+    _current_user.set(user_id)
+
+    if _should_sync(user_id):
         try:
-            sync_all(days=7)
+            sync_all(user_id, days=7)
         except Exception as e:
             logger.warning(f"[{user_id}] Auto-sync failed: {e}")
 
     today = date.today()
 
-    with db() as conn:
+    with db(user_id) as conn:
         has_today_sleep = conn.execute(
             "SELECT 1 FROM sleep WHERE date=? AND total_sleep_seconds > 0", (today.isoformat(),)
         ).fetchone()
@@ -233,7 +235,7 @@ def get_dashboard(user_id: str = Depends(get_current_user)):
     )
     _placeholders = ",".join("?" * len(_STRENGTH_TYPES))
 
-    with db() as conn:
+    with db(user_id) as conn:
         today_str = today.isoformat()
 
         # App sessions completed today with a computed INOL strain
@@ -303,7 +305,7 @@ def get_dashboard(user_id: str = Depends(get_current_user)):
 @app.get("/activities")
 def get_activities(days: int = 14, user_id: str = Depends(get_current_user)):
     cutoff = (date.today() - timedelta(days=days)).isoformat()
-    with db() as conn:
+    with db(user_id) as conn:
         rows = conn.execute(
             """SELECT id, date, type, name, duration_seconds, distance_meters,
                avg_hr, max_hr, calories, strain, training_effect,
@@ -332,11 +334,13 @@ def get_activities(days: int = 14, user_id: str = Depends(get_current_user)):
 
 @app.get("/trends")
 def get_trends(days: int = 90, user_id: str = Depends(get_current_user)):
+    # Set ContextVar so metrics.py routes correctly for this user
+    _current_user.set(user_id)
     end   = date.today()
     start = end - timedelta(days=days)
     points = []
 
-    with db() as conn:
+    with db(user_id) as conn:
         sleep_rows = {r["date"]: r for r in conn.execute(
             "SELECT date, total_sleep_seconds FROM sleep WHERE date BETWEEN ? AND ?",
             (start.isoformat(), end.isoformat())
