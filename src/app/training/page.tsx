@@ -5,7 +5,7 @@ import { motion, AnimatePresence, useMotionValue, useTransform, Reorder, useDrag
 import {
   Plus, X, ChevronRight, Dumbbell, Clock,
   Search, Check, ChevronDown, Trash2, Play, RotateCcw,
-  Trophy, Weight, Flame, Zap, GripVertical, Sparkles, Brain
+  Trophy, Weight, Flame, Zap, GripVertical, Sparkles, Brain, Link2, Unlink
 } from 'lucide-react'
 import { api, WorkoutTemplate, TrainingExercise, SessionDetail, SessionSummary, LastPerformance, SmartSuggest } from '@/lib/api'
 
@@ -543,6 +543,109 @@ function RestTimer({
   )
 }
 
+// ─── Superset helpers ─────────────────────────────────────────────────────────
+
+const SUPERSET_COLORS = ['#6366f1', '#f59e0b', '#22c55e', '#ec4899']
+
+interface SupersetInfo {
+  label: string    // 'A', 'B', 'C'
+  color: string
+  isFirst: boolean
+  isLast: boolean
+}
+
+function buildSupersetMap(
+  exercises: TrainingExercise[],
+  links: Set<string>,
+): Map<number, SupersetInfo> {
+  const result = new Map<number, SupersetInfo>()
+  let colorIdx = 0
+  let i = 0
+  while (i < exercises.length) {
+    const linked = i < exercises.length - 1 && links.has(`${exercises[i].id}_${exercises[i + 1].id}`)
+    if (linked) {
+      const color = SUPERSET_COLORS[colorIdx % SUPERSET_COLORS.length]
+      let j = i
+      let pos = 0
+      // Walk the chain
+      while (j < exercises.length - 1 && links.has(`${exercises[j].id}_${exercises[j + 1].id}`)) {
+        result.set(exercises[j].id, {
+          label: String.fromCharCode(65 + pos),
+          color,
+          isFirst: pos === 0,
+          isLast: false,
+        })
+        j++; pos++
+      }
+      result.set(exercises[j].id, {
+        label: String.fromCharCode(65 + pos),
+        color,
+        isFirst: pos === 0,
+        isLast: true,
+      })
+      colorIdx++
+      i = j + 1
+    } else {
+      i++
+    }
+  }
+  return result
+}
+
+function SupersetConnector({
+  linked,
+  color,
+  onLink,
+  onUnlink,
+}: {
+  linked: boolean
+  color: string
+  onLink: () => void
+  onUnlink: () => void
+}) {
+  if (linked) {
+    return (
+      <div className="flex items-center gap-2 px-3 -my-0.5 relative z-10 pointer-events-none">
+        {/* Vertical bar */}
+        <div
+          className="absolute left-[26px] top-0 bottom-0 w-0.5 rounded-full"
+          style={{ backgroundColor: color + '50' }}
+        />
+        <div className="w-7 flex-shrink-0" />
+        <div className="flex items-center gap-2 flex-1">
+          <div
+            className="flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider pointer-events-auto"
+            style={{ backgroundColor: color + '18', color }}
+          >
+            <Link2 size={9} />
+            Superset
+          </div>
+          <button
+            onPointerDown={e => e.stopPropagation()}
+            onClick={onUnlink}
+            className="p-1 text-white/20 active:text-red-400 transition-colors pointer-events-auto"
+          >
+            <Unlink size={11} />
+          </button>
+        </div>
+      </div>
+    )
+  }
+
+  return (
+    <button
+      onPointerDown={e => e.stopPropagation()}
+      onClick={onLink}
+      className="flex items-center gap-1.5 mx-4 py-0.5 text-white/18 text-[11px] active:text-white/50 transition-colors group"
+    >
+      <div className="flex-1 h-px bg-white/5 group-active:bg-white/10 transition-colors" />
+      <Link2 size={10} className="flex-shrink-0" />
+      <span>superset</span>
+      <div className="flex-1 h-px bg-white/5 group-active:bg-white/10 transition-colors" />
+    </button>
+  )
+}
+
 // ─── Active Session ───────────────────────────────────────────────────────────
 
 interface ActiveSet {
@@ -555,7 +658,7 @@ interface ActiveSet {
 
 // One exercise card inside the reorderable list
 function ExerciseCard({
-  ex, exSets, kgLabel, rec, lastP,
+  ex, exSets, kgLabel, rec, lastP, supersetInfo,
   onAddSet, onUpdate, onSave, onDelete, onRemove,
 }: {
   ex: TrainingExercise
@@ -563,6 +666,7 @@ function ExerciseCard({
   kgLabel: string
   rec: LastPerformance['recommendation'] | null
   lastP: LastPerformance | null
+  supersetInfo?: SupersetInfo
   onAddSet: () => void
   onUpdate: (idx: number, field: 'weight_kg' | 'reps', val: string) => void
   onSave: (idx: number) => void
@@ -570,6 +674,7 @@ function ExerciseCard({
   onRemove: () => void
 }) {
   const dragControls = useDragControls()
+  const ssColor = supersetInfo?.color
 
   return (
     <Reorder.Item
@@ -577,8 +682,14 @@ function ExerciseCard({
       dragListener={false}
       dragControls={dragControls}
       as="div"
-      className="bg-white/5 rounded-2xl border border-white/8 overflow-hidden"
-      style={{ listStyle: 'none' }}
+      className="rounded-2xl border overflow-hidden"
+      style={{
+        listStyle: 'none',
+        backgroundColor: 'rgba(255,255,255,0.05)',
+        borderColor: ssColor ? ssColor + '40' : 'rgba(255,255,255,0.08)',
+        borderLeftWidth: ssColor ? '3px' : '1px',
+        borderLeftColor: ssColor ?? 'rgba(255,255,255,0.08)',
+      }}
     >
       {/* Exercise header row */}
       <div className="flex items-center gap-2 px-3 py-3 border-b border-white/5">
@@ -588,6 +699,15 @@ function ExerciseCard({
         >
           <GripVertical size={16} />
         </button>
+        {/* Superset label badge */}
+        {supersetInfo && (
+          <span
+            className="w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-bold flex-shrink-0"
+            style={{ backgroundColor: supersetInfo.color + '25', color: supersetInfo.color }}
+          >
+            {supersetInfo.label}
+          </span>
+        )}
         <p className="flex-1 text-sm font-semibold text-white">{ex.name}</p>
         <button
           onPointerDown={e => e.stopPropagation()}
@@ -784,6 +904,19 @@ function ActiveSession({
   const [finishStrain, setFinishStrain] = useState<number | null>(null)
   const [restActive, setRestActive] = useState(false)
   const [restTotal, setRestTotal] = useState(REST_DEFAULT)
+  // supersetLinks: "exId1_exId2" means those two consecutive exercises are a superset
+  const [supersetLinks, setSupersetLinks] = useState<Set<string>>(new Set())
+
+  const linkSuperset = (exA: TrainingExercise, exB: TrainingExercise) => {
+    setSupersetLinks(prev => new Set(prev).add(`${exA.id}_${exB.id}`))
+  }
+  const unlinkSuperset = (exA: TrainingExercise, exB: TrainingExercise) => {
+    setSupersetLinks(prev => {
+      const next = new Set(prev)
+      next.delete(`${exA.id}_${exB.id}`)
+      return next
+    })
+  }
 
   useEffect(() => {
     exercises.forEach(ex => {
@@ -835,7 +968,12 @@ function ActiveSession({
         cur[idx] = { ...cur[idx], saved: true, set_id: res.set_id }
         return { ...prev, [exId]: cur }
       })
-      setRestActive(true)
+      // Only start rest timer if this exercise is NOT the non-final member of a superset
+      // i.e., if it's the last (or only) exercise in its superset group → rest
+      const ssMap = buildSupersetMap(exercises, supersetLinks)
+      const info = ssMap.get(exId)
+      const shouldRest = !info || info.isLast
+      if (shouldRest) setRestActive(true)
     } catch {}
   }
 
@@ -854,6 +992,14 @@ function ActiveSession({
   const removeExercise = (exId: number) => {
     setExercises(prev => prev.filter(e => e.id !== exId))
     setSets(prev => { const n = { ...prev }; delete n[exId]; return n })
+    // Remove any superset links involving this exercise
+    setSupersetLinks(prev => {
+      const next = new Set(prev)
+      for (const key of [...next]) {
+        if (key.startsWith(`${exId}_`) || key.endsWith(`_${exId}`)) next.delete(key)
+      }
+      return next
+    })
   }
 
   const finish = async () => {
@@ -916,23 +1062,41 @@ function ActiveSession({
                 values={exercises}
                 onReorder={setExercises}
                 as="div"
-                className="px-4 pt-3 space-y-3"
+                className="px-4 pt-3 space-y-1.5"
               >
-                {exercises.map(ex => (
-                  <ExerciseCard
-                    key={ex.id}
-                    ex={ex}
-                    exSets={sets[ex.id] ?? []}
-                    kgLabel={ex.equipment === 'Dumbbell' ? 'ea' : 'kg'}
-                    rec={perf[ex.id]?.recommendation ?? null}
-                    lastP={perf[ex.id] ?? null}
-                    onAddSet={() => addSet(ex.id)}
-                    onUpdate={(idx, field, val) => updateSet(ex.id, idx, field, val)}
-                    onSave={(idx) => saveSet(ex.id, idx)}
-                    onDelete={(idx) => deleteSet(ex.id, idx)}
-                    onRemove={() => removeExercise(ex.id)}
-                  />
-                ))}
+                {(() => {
+                  const ssMap = buildSupersetMap(exercises, supersetLinks)
+                  return exercises.map((ex, i) => {
+                    const nextEx = exercises[i + 1]
+                    const linked = nextEx ? supersetLinks.has(`${ex.id}_${nextEx.id}`) : false
+                    const ssColor = ssMap.get(ex.id)?.color ?? SUPERSET_COLORS[0]
+                    return (
+                      <React.Fragment key={ex.id}>
+                        <ExerciseCard
+                          ex={ex}
+                          exSets={sets[ex.id] ?? []}
+                          kgLabel={ex.equipment === 'Dumbbell' ? 'ea' : 'kg'}
+                          rec={perf[ex.id]?.recommendation ?? null}
+                          lastP={perf[ex.id] ?? null}
+                          supersetInfo={ssMap.get(ex.id)}
+                          onAddSet={() => addSet(ex.id)}
+                          onUpdate={(idx, field, val) => updateSet(ex.id, idx, field, val)}
+                          onSave={(idx) => saveSet(ex.id, idx)}
+                          onDelete={(idx) => deleteSet(ex.id, idx)}
+                          onRemove={() => removeExercise(ex.id)}
+                        />
+                        {nextEx && (
+                          <SupersetConnector
+                            linked={linked}
+                            color={ssColor}
+                            onLink={() => linkSuperset(ex, nextEx)}
+                            onUnlink={() => unlinkSuperset(ex, nextEx)}
+                          />
+                        )}
+                      </React.Fragment>
+                    )
+                  })
+                })()}
               </Reorder.Group>
 
               <div className="px-4 pt-3 pb-6">
