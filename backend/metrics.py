@@ -68,11 +68,29 @@ def calc_sleep_score(target_date: date = None) -> dict:
 
         # 30-day baselines
         dur_hist = _rolling(conn, "sleep", "total_sleep_seconds")
-        hrv_hist = _rolling(conn, "sleep", "hrv_overnight")
-        rhr_hist = _rolling(conn, "sleep", "resting_hr")
-
         avg_dur = _mean(dur_hist) or total
-        avg_hrv = _mean(hrv_hist)
+
+        # HRV — read from dedicated hrv table (sleep.hrv_overnight is often NULL)
+        hrv_row = conn.execute(
+            "SELECT hrv_value FROM hrv WHERE date=?", (target_date.isoformat(),)
+        ).fetchone()
+        hrv_today = hrv_row[0] if hrv_row else sleep.get("hrv_overnight")
+        hrv_hist = _rolling(conn, "hrv", "hrv_value", days=30)
+        if not hrv_hist:
+            # fall back to sleep table if hrv table is empty
+            hrv_hist = _rolling(conn, "sleep", "hrv_overnight")
+        avg_hrv  = _mean(hrv_hist)
+        hrv_sd   = _std(hrv_hist)
+
+        # RHR — read from steps table (sleep.resting_hr is often NULL)
+        rhr_row = conn.execute(
+            "SELECT resting_hr FROM steps WHERE date=? AND resting_hr IS NOT NULL",
+            (target_date.isoformat(),)
+        ).fetchone()
+        rhr_today = rhr_row[0] if rhr_row else sleep.get("resting_hr")
+        rhr_hist = _rolling(conn, "steps", "resting_hr", days=30)
+        if not rhr_hist:
+            rhr_hist = _rolling(conn, "sleep", "resting_hr")
         avg_rhr = _mean(rhr_hist)
 
         # 1. Duration (20%)
@@ -111,16 +129,18 @@ def calc_sleep_score(target_date: date = None) -> dict:
         awake_pct = (sleep["awake_seconds"] or 0) / total * 100
         awake_score = _clamp(100 - (awake_pct / 10) * 100) if awake_pct <= 10 else 0
 
-        # 6. HRV vs baseline (10%)
-        hrv_today = sleep["hrv_overnight"]
+        # 6. HRV vs baseline (10%) — z-score approach for accuracy
         if hrv_today and avg_hrv:
-            hrv_ratio = hrv_today / avg_hrv
-            hrv_score = _clamp(hrv_ratio * 100)
+            if hrv_sd and hrv_sd > 0:
+                z = (hrv_today - avg_hrv) / hrv_sd
+                hrv_score = _clamp(50 + z * 15)
+            else:
+                hrv_ratio = hrv_today / avg_hrv
+                hrv_score = _clamp(hrv_ratio * 100)
         else:
             hrv_score = 50.0
 
         # 7. Resting HR vs baseline (5%)
-        rhr_today = sleep["resting_hr"]
         if rhr_today and avg_rhr:
             rhr_score = _clamp(100 - ((rhr_today - avg_rhr) / avg_rhr) * 200)
         else:
