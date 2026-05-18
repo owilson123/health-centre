@@ -119,6 +119,24 @@ export const api = {
 
     smartSuggest: () => get<SmartSuggest>('/training/smart-suggest'),
   },
+
+  // Running
+  running: {
+    getProfile:  () => get<RunningProfile>('/running/profile'),
+    getSuggest:  () => get<RunSuggestion>('/running/suggest'),
+    getPlan:     (type: RunType, distance_km: number) =>
+      get<RunPlan>(`/running/plan?type=${type}&distance_km=${distance_km}`),
+    getLogs:     (limit = 30) => get<RunLog[]>(`/running/logs?limit=${limit}`),
+    createLog:   (body: {
+      type: RunType
+      planned_distance_km?: number
+      actual_distance_km?: number
+      actual_duration_s?: number
+      actual_avg_hr?: number
+      notes?: string
+    }) => post<{ id: number; status: string }>('/running/logs', body),
+    deleteLog:   (id: number) => del<{ status: string }>('/running/logs/' + id),
+  },
 }
 
 // ─── Training types ───────────────────────────────────────────────────────────
@@ -210,4 +228,67 @@ export interface LastPerformance {
   sets: { set_number: number; weight_kg: number | null; reps: number }[]
   session_date: string | null
   recommendation: DupRecommendation | null
+}
+
+// ─── Running types ────────────────────────────────────────────────────────────
+
+export type RunType = 'long' | 'tempo' | 'interval' | 'recovery' | 'easy'
+
+export interface PaceZone {
+  pace_s_km:      number
+  pace_low_s_km:  number
+  pace_high_s_km: number
+  label:          string
+}
+
+export interface RunningProfile {
+  vdot:             number | null
+  vdot_source:      string
+  estimated_5k_s:   number | null
+  pace_zones:       Partial<Record<RunType, PaceZone>>
+  max_hr_observed:  number | null
+  hr_zones:         Partial<Record<RunType, [number, number]>>
+  weekly_km:        number
+  weekly_runs:      number
+  monthly_km:       number
+  longest_run_km:   number
+  total_runs_90d:   number
+}
+
+export interface RunSuggestion {
+  type:                RunType
+  reason:              string
+  urgency:             'high' | 'medium' | 'low'
+  coach_note:          string
+  target_distance_km:  number
+  pace_zone:           PaceZone | null
+  hr_zone:             [number, number]
+  workout_structure:   string
+  meta:                { label: string; description: string; icon: string }
+}
+
+export interface RunPlan {
+  type:                RunType
+  distance_km:         number
+  pace_zone:           PaceZone | null
+  hr_zone:             [number, number]
+  workout_structure:   string
+  coach_note:          string
+  description:         string
+  basis:               string
+  max_hr_used:         number | null
+  vdot:                number | null
+}
+
+export interface RunLog {
+  id:                   number
+  type:                 string
+  planned_distance_km:  number | null
+  actual_distance_km:   number | null
+  actual_duration_s:    number | null
+  actual_avg_pace_s_km: number | null
+  actual_avg_hr:        number | null
+  notes:                string | null
+  started_at:           string
+  finished_at:          string | null
 }

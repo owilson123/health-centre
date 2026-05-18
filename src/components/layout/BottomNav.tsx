@@ -2,15 +2,15 @@
 
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
-import { Home, Moon, Activity, CalendarDays, Dumbbell } from 'lucide-react'
+import { Home, Moon, PersonStanding, CalendarDays, Dumbbell } from 'lucide-react'
 import { cn } from '@/lib/utils'
 
 const tabs = [
-  { href: '/',           label: 'Overview',   icon: Home },
-  { href: '/sleep',      label: 'Sleep',      icon: Moon },
-  { href: '/activities', label: 'Activities', icon: Activity },
-  { href: '/calendar',   label: 'Calendar',   icon: CalendarDays },
-  { href: '/training',   label: 'Training',   icon: Dumbbell },
+  { href: '/',          label: 'Overview',  icon: Home },
+  { href: '/sleep',     label: 'Sleep',     icon: Moon },
+  { href: '/running',   label: 'Running',   icon: PersonStanding },
+  { href: '/calendar',  label: 'Calendar',  icon: CalendarDays },
+  { href: '/training',  label: 'Training',  icon: Dumbbell },
 ]
 
 export function BottomNav() {
