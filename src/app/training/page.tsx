@@ -440,45 +440,154 @@ const PHASE_STYLE: Record<string, { bg: string; text: string; dot: string }> = {
 // ─── Rest Timer ──────────────────────────────────────────────────────────────
 
 const REST_DEFAULT = 105 // 1 min 45 s
+const REST_TS_KEY  = 'hc_rest_end_ts'    // localStorage key for end timestamp
+const REST_DUR_KEY = 'hc_rest_duration'  // localStorage key for original duration
+
+// Schedule a Service Worker notification at a future time.
+// Falls back to a plain Notification when SW is unavailable.
+async function scheduleRestNotification(delayMs: number, notifRef: React.MutableRefObject<ReturnType<typeof setTimeout> | null>) {
+  if (typeof window === 'undefined' || !('Notification' in window)) return
+  if (delayMs <= 0) return
+
+  // Request permission lazily (first timer use)
+  if (Notification.permission === 'default') {
+    await Notification.requestPermission()
+  }
+  if (Notification.permission !== 'granted') return
+
+  if (notifRef.current !== null) clearTimeout(notifRef.current)
+
+  notifRef.current = setTimeout(async () => {
+    notifRef.current = null
+    const opts: NotificationOptions = {
+      body: 'Time to hit your next set 💪',
+      icon: '/icons/icon-192.png',
+      badge: '/icons/icon-192.png',
+      tag: 'rest-timer',
+      silent: false,
+    }
+    try {
+      // Prefer SW notification — shown even when page is backgrounded
+      const reg = await navigator.serviceWorker?.ready
+      if (reg) {
+        reg.showNotification('Rest Complete', opts)
+        return
+      }
+    } catch { /* SW not available */ }
+    // Fallback: in-page notification (works when tab is visible/foreground)
+    new Notification('Rest Complete', opts)
+  }, delayMs)
+}
 
 function RestTimer({
   initialSeconds,
   onDone,
   onSkip,
-  onAdjust,
 }: {
   initialSeconds: number
   onDone: () => void
   onSkip: () => void
-  onAdjust: (delta: number) => void
 }) {
-  const [seconds, setSeconds] = useState(initialSeconds)
-  const doneRef = useRef(false)
+  // endTs: wall-clock timestamp (ms) when rest should end
+  const endTsRef  = useRef<number>(0)
+  const totalRef  = useRef<number>(initialSeconds)   // for ring percentage
+  const doneRef   = useRef(false)
+  const notifRef  = useRef<ReturnType<typeof setTimeout> | null>(null)
 
-  // Keep seconds in sync if parent adjusts total
-  useEffect(() => { setSeconds(s => Math.max(1, s + (initialSeconds - REST_DEFAULT))) }, [initialSeconds])
+  const [seconds, setSeconds] = useState<number>(initialSeconds)
 
+  // ── Mount: restore from localStorage if a timer is already running ───────
+  useEffect(() => {
+    const storedTs  = localStorage.getItem(REST_TS_KEY)
+    const storedDur = localStorage.getItem(REST_DUR_KEY)
+
+    if (storedTs) {
+      const ts        = parseInt(storedTs, 10)
+      const dur       = storedDur ? parseInt(storedDur, 10) : initialSeconds
+      const remaining = Math.round((ts - Date.now()) / 1000)
+      endTsRef.current = ts
+      totalRef.current = dur
+      setSeconds(Math.max(0, remaining))
+    } else {
+      // Fresh timer
+      const ts = Date.now() + initialSeconds * 1000
+      endTsRef.current = ts
+      totalRef.current = initialSeconds
+      localStorage.setItem(REST_TS_KEY,  String(ts))
+      localStorage.setItem(REST_DUR_KEY, String(initialSeconds))
+      setSeconds(initialSeconds)
+    }
+
+    // Schedule background notification
+    const delay = endTsRef.current - Date.now()
+    scheduleRestNotification(delay, notifRef)
+
+    return () => {
+      // Cancel pending notification on unmount (skip/done clears storage separately)
+      if (notifRef.current !== null) clearTimeout(notifRef.current)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  // ── Page visibility: recalculate immediately when returning to the app ────
+  useEffect(() => {
+    const onVis = () => {
+      if (!document.hidden && endTsRef.current > 0) {
+        const remaining = Math.round((endTsRef.current - Date.now()) / 1000)
+        setSeconds(Math.max(0, remaining))
+      }
+    }
+    document.addEventListener('visibilitychange', onVis)
+    return () => document.removeEventListener('visibilitychange', onVis)
+  }, [])
+
+  // ── Tick: derive from wall-clock (not decrement) ─────────────────────────
   useEffect(() => {
     if (seconds <= 0 && !doneRef.current) {
       doneRef.current = true
+      localStorage.removeItem(REST_TS_KEY)
+      localStorage.removeItem(REST_DUR_KEY)
       try { navigator.vibrate?.([180, 80, 180, 80, 360]) } catch {}
       const t = setTimeout(onDone, 1800)
       return () => clearTimeout(t)
     }
-    const id = setInterval(() => setSeconds(s => s - 1), 1000)
+    const id = setInterval(() => {
+      if (endTsRef.current > 0) {
+        const remaining = Math.round((endTsRef.current - Date.now()) / 1000)
+        setSeconds(Math.max(0, remaining))
+      }
+    }, 500)
     return () => clearInterval(id)
   }, [seconds, onDone])
 
-  const pct = Math.max(0, seconds / initialSeconds)
-  const mins = Math.floor(seconds / 60)
-  const secs = Math.max(0, seconds % 60)
+  // ── Adjust +/- 15 s ───────────────────────────────────────────────────────
+  const adjust = (delta: number) => {
+    endTsRef.current  = endTsRef.current + delta * 1000
+    totalRef.current  = Math.max(15, totalRef.current + delta)
+    localStorage.setItem(REST_TS_KEY,  String(endTsRef.current))
+    localStorage.setItem(REST_DUR_KEY, String(totalRef.current))
+    const remaining = Math.round((endTsRef.current - Date.now()) / 1000)
+    setSeconds(Math.max(1, remaining))
+    // Reschedule notification
+    scheduleRestNotification(Math.max(0, endTsRef.current - Date.now()), notifRef)
+  }
+
+  const handleSkip = () => {
+    localStorage.removeItem(REST_TS_KEY)
+    localStorage.removeItem(REST_DUR_KEY)
+    if (notifRef.current !== null) { clearTimeout(notifRef.current); notifRef.current = null }
+    onSkip()
+  }
+
+  const pct  = totalRef.current > 0 ? Math.max(0, seconds / totalRef.current) : 0
+  const mins = Math.floor(Math.max(0, seconds) / 60)
+  const secs = Math.max(0, seconds) % 60
+  const done = seconds <= 0
 
   // SVG ring
-  const R = 26
+  const R    = 26
   const circ = 2 * Math.PI * R
   const dash = circ * pct
-
-  const done = seconds <= 0
 
   return (
     <motion.div
@@ -519,12 +628,12 @@ function RestTimer({
           <div className="flex items-center gap-2 mt-1">
             <button
               onPointerDown={e => e.stopPropagation()}
-              onClick={() => { setSeconds(s => Math.max(5, s - 15)); onAdjust(-15) }}
+              onClick={() => adjust(-15)}
               className="text-[11px] text-white/40 active:text-white bg-white/8 rounded-lg px-2 py-0.5"
             >−15s</button>
             <button
               onPointerDown={e => e.stopPropagation()}
-              onClick={() => { setSeconds(s => s + 15); onAdjust(+15) }}
+              onClick={() => adjust(+15)}
               className="text-[11px] text-white/40 active:text-white bg-white/8 rounded-lg px-2 py-0.5"
             >+15s</button>
           </div>
@@ -534,7 +643,7 @@ function RestTimer({
       {/* Skip */}
       <button
         onPointerDown={e => e.stopPropagation()}
-        onClick={onSkip}
+        onClick={handleSkip}
         className="flex-shrink-0 text-xs text-white/30 active:text-white/70 px-2 py-1"
       >
         {done ? 'OK' : 'Skip'}
@@ -903,7 +1012,6 @@ function ActiveSession({
   const [finishing, setFinishing] = useState(false)
   const [finishStrain, setFinishStrain] = useState<number | null>(null)
   const [restActive, setRestActive] = useState(false)
-  const [restTotal, setRestTotal] = useState(REST_DEFAULT)
   // supersetLinks: "exId1_exId2" means those two consecutive exercises are a superset
   const [supersetLinks, setSupersetLinks] = useState<Set<string>>(new Set())
 
@@ -1003,6 +1111,9 @@ function ActiveSession({
   }
 
   const finish = async () => {
+    // Clear any lingering rest timer state
+    localStorage.removeItem(REST_TS_KEY)
+    localStorage.removeItem(REST_DUR_KEY)
     setFinishing(true)
     try {
       const res = await api.training.finishSession(session.session_id) as { strength_strain?: number }
@@ -1117,11 +1228,9 @@ function ActiveSession({
           {restActive && (
             <div className="px-4 pb-3 pt-1 flex-shrink-0">
               <RestTimer
-                key={restTotal}
-                initialSeconds={restTotal}
+                initialSeconds={REST_DEFAULT}
                 onDone={() => setRestActive(false)}
                 onSkip={() => setRestActive(false)}
-                onAdjust={delta => setRestTotal(t => Math.max(15, t + delta))}
               />
             </div>
           )}
