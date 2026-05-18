@@ -355,47 +355,188 @@ def _get_running_profile(conn) -> dict:
     }
 
 
+# ─── Garmin run classifier ────────────────────────────────────────────────────
+
+def _classify_run(
+    distance_km: float,
+    duration_s: float,
+    avg_hr: float | None,
+    max_hr_ref: int,
+    median_dist: float,
+    easy_pace_s: int | None,
+) -> str:
+    """
+    Classify a run as long / tempo / interval / recovery / easy using
+    distance, HR%, and pace — the same signals a coach would use on
+    a training log.
+    """
+    if distance_km <= 0 or duration_s <= 0:
+        return "easy"
+
+    pace_s_km = duration_s / distance_km
+    hr_pct    = (avg_hr / max_hr_ref) if (avg_hr and max_hr_ref) else 0.0
+
+    # Interval: HR clearly in VO2max territory (≥87% max) — short/punchy effort
+    if hr_pct >= 0.87:
+        return "interval"
+
+    # Tempo: HR in threshold zone (80–87% max) OR notably faster than easy pace
+    tempo_by_hr   = 0.80 <= hr_pct < 0.87
+    tempo_by_pace = easy_pace_s and pace_s_km < easy_pace_s * 0.92
+    if tempo_by_hr or tempo_by_pace:
+        return "tempo"
+
+    # Long: substantially longer than the user's typical run
+    # Threshold: ≥1.4× their median distance AND ≥10 km (avoids false positives for low-mileage runners)
+    long_threshold = max(10.0, median_dist * 1.4)
+    if distance_km >= long_threshold:
+        return "long"
+
+    # Recovery: very low HR (<70% max) OR significantly slower than easy pace
+    recovery_by_hr   = hr_pct > 0 and hr_pct < 0.70
+    recovery_by_pace = easy_pace_s and pace_s_km > easy_pace_s * 1.12
+    if recovery_by_hr or recovery_by_pace:
+        return "recovery"
+
+    return "easy"
+
+
 # ─── Coach suggestion engine ──────────────────────────────────────────────────
 
 def _smart_suggest(conn, profile: dict) -> dict:
     """
-    Return a personalised run suggestion using:
-    • Days since each run type
-    • Recovery & sleep scores from recent DB data
-    • Recent gym training strain
-    • Training balance (avoid repeating same type)
+    Personalised run suggestion that reads ALL run data — both Garmin
+    activities and manual logs — classifying each Garmin run by effort
+    level so the coach never recommends something you just did.
+
+    Signals used (in priority order):
+    1. Acute fatigue: HRV vs baseline, resting HR trend, sleep quality,
+       recent gym strain — always overrides training-type logic
+    2. Consecutive run days: ≥3 in a row → mandatory easy/recovery
+    3. Run-day yesterday or today: suppresses hard sessions regardless
+    4. Days since each run type (long / tempo / interval) across
+       BOTH Garmin activities (classified) and manual logs
+    5. Weekly volume vs 4-week average: high volume week → easier session
+    6. Training balance: fill the most overdue session type
     """
-    today = date.today()
+    today  = date.today()
+    cutoff = (today - timedelta(days=28)).isoformat()   # 4-week window
 
-    # Days since each logged run type (manual logs only — Garmin classified below)
-    last_by_type: dict[str, int] = {}
-    rows = conn.execute("""
-        SELECT type, MAX(DATE(started_at)) AS last_date
-        FROM run_logs GROUP BY type
-    """).fetchall()
-    for r in rows:
+    # ── Pull all runs from both sources ───────────────────────────────────────
+    garmin_runs = conn.execute("""
+        SELECT date,
+               distance_meters / 1000.0 AS distance_km,
+               duration_seconds,
+               avg_hr,
+               max_hr
+        FROM activities
+        WHERE LOWER(type) LIKE '%run%'
+          AND distance_meters > 800
+          AND duration_seconds > 240
+          AND date >= ?
+        ORDER BY date DESC
+    """, (cutoff,)).fetchall()
+
+    manual_runs = conn.execute("""
+        SELECT DATE(started_at)       AS date,
+               actual_distance_km     AS distance_km,
+               actual_duration_s      AS duration_seconds,
+               actual_avg_hr          AS avg_hr,
+               NULL                   AS max_hr,
+               type                   AS manual_type
+        FROM run_logs
+        WHERE actual_distance_km IS NOT NULL AND actual_duration_s IS NOT NULL
+          AND actual_distance_km > 0.5
+          AND started_at >= ?
+        ORDER BY started_at DESC
+    """, (cutoff,)).fetchall()
+
+    max_hr_ref  = profile.get("max_hr_observed") or 185
+
+    # Median distance from Garmin runs (last 28 days) — defines "normal" run length
+    g_dists     = [r["distance_km"] for r in garmin_runs if r["distance_km"]]
+    m_dists     = [r["distance_km"] for r in manual_runs if r["distance_km"]]
+    all_dists   = sorted(g_dists + m_dists)
+    median_dist = all_dists[len(all_dists) // 2] if all_dists else 8.0
+
+    # Easy pace from profile (centre of easy zone)
+    easy_pz    = profile.get("pace_zones", {}).get("easy")
+    easy_pace  = easy_pz["pace_s_km"] if easy_pz else None
+
+    # ── Classify every Garmin run ─────────────────────────────────────────────
+    # Build a combined list: (date_str, run_type, distance_km)
+    all_classified: list[tuple[str, str]] = []
+
+    for r in garmin_runs:
+        rtype = _classify_run(
+            r["distance_km"] or 0,
+            r["duration_seconds"] or 0,
+            r["avg_hr"],
+            max_hr_ref,
+            median_dist,
+            easy_pace,
+        )
+        all_classified.append((r["date"], rtype))
+
+    for r in manual_runs:
+        # Manual logs have an explicit type — trust it directly
+        rtype = r["manual_type"] or "easy"
+        all_classified.append((r["date"], rtype))
+
+    # ── Days since each run type (across all sources) ─────────────────────────
+    last_date_by_type: dict[str, date] = {}
+    for ds, rtype in all_classified:
         try:
-            last_by_type[r["type"]] = (today - date.fromisoformat(r["last_date"])).days
+            d = date.fromisoformat(ds)
+        except Exception:
+            continue
+        if rtype not in last_date_by_type or d > last_date_by_type[rtype]:
+            last_date_by_type[rtype] = d
+
+    def days_since(rtype: str) -> int:
+        if rtype not in last_date_by_type:
+            return 99
+        return (today - last_date_by_type[rtype]).days
+
+    days_since_long     = days_since("long")
+    days_since_tempo    = days_since("tempo")
+    days_since_interval = days_since("interval")
+
+    # ── Most recent run overall ───────────────────────────────────────────────
+    all_run_dates: list[date] = []
+    for ds, _ in all_classified:
+        try:
+            all_run_dates.append(date.fromisoformat(ds))
         except Exception:
             pass
-
-    # Days since last run at all (any source)
     last_any_run: int | None = None
-    g_last = conn.execute("""
-        SELECT MAX(date) AS d FROM activities WHERE LOWER(type) LIKE '%run%'
-    """).fetchone()
-    m_last = conn.execute("""
-        SELECT MAX(DATE(started_at)) AS d FROM run_logs WHERE finished_at IS NOT NULL
-    """).fetchone()
-    candidates = [x["d"] for x in [g_last, m_last] if x["d"]]
-    if candidates:
-        best_date_str = max(candidates)
-        try:
-            last_any_run = (today - date.fromisoformat(best_date_str)).days
-        except Exception:
-            pass
+    if all_run_dates:
+        last_any_run = (today - max(all_run_dates)).days
 
-    # Approximate recovery quality from resting HR trend and HRV (last 2 days)
+    # ── Consecutive run days (looking back from today) ────────────────────────
+    run_date_set = set(all_run_dates)
+    consecutive = 0
+    check = today - timedelta(days=1)
+    while check in run_date_set:
+        consecutive += 1
+        check -= timedelta(days=1)
+
+    # ── Weekly volume vs 4-week average ──────────────────────────────────────
+    week_km  = sum(
+        r["distance_km"] for r in garmin_runs
+        if r["distance_km"] and r["date"] >= (today - timedelta(days=7)).isoformat()
+    ) + sum(
+        r["distance_km"] for r in manual_runs
+        if r["distance_km"] and r["date"] >= (today - timedelta(days=7)).isoformat()
+    )
+    avg_weekly_km = sum(
+        r["distance_km"] for r in garmin_runs if r["distance_km"]
+    ) / 4 + sum(
+        r["distance_km"] for r in manual_runs if r["distance_km"]
+    ) / 4
+    high_volume_week = avg_weekly_km > 5 and week_km >= avg_weekly_km * 1.20
+
+    # ── Fatigue signals from health metrics ───────────────────────────────────
     rhr_row = conn.execute("""
         SELECT AVG(resting_hr) AS avg_rhr FROM steps
         WHERE date >= ? AND resting_hr IS NOT NULL
@@ -404,97 +545,136 @@ def _smart_suggest(conn, profile: dict) -> dict:
         SELECT AVG(resting_hr) AS avg_rhr7 FROM steps
         WHERE date >= ? AND resting_hr IS NOT NULL
     """, ((today - timedelta(days=7)).isoformat(),)).fetchone()
-    current_rhr  = rhr_row["avg_rhr"]  if rhr_row  else None
+    current_rhr  = rhr_row["avg_rhr"]   if rhr_row  else None
     baseline_rhr = rhr_row7["avg_rhr7"] if rhr_row7 else None
-    rhr_elevated = (
-        current_rhr and baseline_rhr and current_rhr > baseline_rhr * 1.05
-    )
+    rhr_elevated = current_rhr and baseline_rhr and current_rhr > baseline_rhr * 1.05
 
-    # HRV: today's vs 7-day mean
-    hrv_today_row = conn.execute("""
-        SELECT hrv_value FROM hrv WHERE date = ?
-    """, (today.isoformat(),)).fetchone()
-    hrv_mean_row = conn.execute("""
+    hrv_today_row = conn.execute(
+        "SELECT hrv_value FROM hrv WHERE date = ?", (today.isoformat(),)
+    ).fetchone()
+    hrv_mean_row  = conn.execute("""
         SELECT AVG(hrv_value) AS avg_hrv FROM hrv WHERE date >= ?
     """, ((today - timedelta(days=7)).isoformat(),)).fetchone()
-    hrv_today    = hrv_today_row["hrv_value"] if hrv_today_row else None
-    hrv_mean7    = hrv_mean_row["avg_hrv"]    if hrv_mean_row  else None
+    hrv_today      = hrv_today_row["hrv_value"] if hrv_today_row else None
+    hrv_mean7      = hrv_mean_row["avg_hrv"]    if hrv_mean_row  else None
     hrv_suppressed = hrv_today and hrv_mean7 and hrv_today < hrv_mean7 * 0.90
 
-    # Recent sleep quality
     sleep_row = conn.execute("""
         SELECT efficiency, total_sleep_seconds FROM sleep
-        WHERE date = ? OR date = ?
-        ORDER BY date DESC LIMIT 1
+        WHERE date IN (?, ?) ORDER BY date DESC LIMIT 1
     """, (today.isoformat(), (today - timedelta(days=1)).isoformat())).fetchone()
-    poor_sleep = (
-        sleep_row and (
-            (sleep_row["efficiency"] and sleep_row["efficiency"] < 75) or
-            (sleep_row["total_sleep_seconds"] and sleep_row["total_sleep_seconds"] < 21600)  # < 6h
-        )
+    poor_sleep = sleep_row and (
+        (sleep_row["efficiency"] and sleep_row["efficiency"] < 75) or
+        (sleep_row["total_sleep_seconds"] and sleep_row["total_sleep_seconds"] < 21600)
     )
 
-    # Recent gym training strain (last 48h)
     strain_row = conn.execute("""
-        SELECT AVG(strength_strain) AS avg
-        FROM workout_sessions
-        WHERE finished_at IS NOT NULL
-          AND DATE(finished_at) >= ?
-          AND strength_strain > 0
+        SELECT AVG(strength_strain) AS avg FROM workout_sessions
+        WHERE finished_at IS NOT NULL AND DATE(finished_at) >= ? AND strength_strain > 0
     """, ((today - timedelta(days=2)).isoformat(),)).fetchone()
     heavy_gym = strain_row["avg"] and strain_row["avg"] >= 55
 
+    # ── Ran hard or long yesterday / today? ───────────────────────────────────
+    # Check Garmin + manual for any hard effort in last 24–48h
+    recent_hard = any(
+        rtype in ("long", "tempo", "interval")
+        for ds, rtype in all_classified
+        if ds >= (today - timedelta(days=1)).isoformat()
+    )
+    ran_today = any(
+        ds == today.isoformat()
+        for ds, _ in all_classified
+    )
+
     # ── Decision tree ─────────────────────────────────────────────────────────
-    # Flags that push toward easier sessions
-    recovery_flags  = sum([bool(rhr_elevated), bool(hrv_suppressed), bool(poor_sleep)])
-    is_fatigued     = recovery_flags >= 2 or (heavy_gym and recovery_flags >= 1)
+    recovery_flags = sum([bool(rhr_elevated), bool(hrv_suppressed), bool(poor_sleep)])
+    is_fatigued    = recovery_flags >= 2 or (heavy_gym and recovery_flags >= 1)
+    urgency        = "medium"
 
-    days_since_long     = last_by_type.get("long",     99)
-    days_since_tempo    = last_by_type.get("tempo",    99)
-    days_since_interval = last_by_type.get("interval", 99)
-    days_since_recovery = last_by_type.get("recovery", 99)
-
-    urgency = "medium"
-
+    # 1. Physiological fatigue always wins
     if is_fatigued:
         rtype   = "recovery"
         urgency = "high"
         if hrv_suppressed and rhr_elevated:
-            reason     = "HRV is suppressed and resting HR is elevated — your body is asking for an easy day."
+            reason = "HRV is suppressed and resting HR is elevated — your body is signalling it needs an easy day."
         elif poor_sleep:
-            reason     = "Poor sleep last night — a recovery run will help without digging the hole deeper."
+            reason = "Poor sleep last night — a short recovery run will promote blood flow without adding stress."
         else:
-            reason     = "Recent gym load and fatigue markers suggest a light aerobic session today."
+            reason = "Recent training load and fatigue markers suggest a light aerobic session today."
 
+    # 2. No running history
     elif last_any_run is None:
         rtype  = "easy"
-        reason = "No running history yet — start with an easy baseline run to calibrate your zones."
+        reason = "No running history yet — let's start with an easy calibration run to set your zones."
 
-    elif last_any_run >= 4:
-        # Haven't run in a while — reintroduce easy
-        rtype  = "easy"
-        urgency = "high"
-        reason = f"You haven't run in {last_any_run} days — a steady easy run to get back into rhythm."
-
-    elif days_since_long >= 7 and not is_fatigued:
-        rtype  = "long"
-        urgency = "high"
-        reason = f"Your long run is overdue ({days_since_long} days) — this is your most important aerobic session."
-
-    elif days_since_tempo >= 5 and not is_fatigued:
-        rtype  = "tempo"
-        urgency = "medium"
-        reason = f"Tempo work is {days_since_tempo} days ago — a threshold session will push your lactate ceiling."
-
-    elif days_since_interval >= 7 and not is_fatigued and profile.get("vdot"):
-        rtype  = "interval"
-        urgency = "medium"
-        reason = f"Intervals haven't featured in {days_since_interval} days — VO₂max stimulus will boost your top-end fitness."
-
-    else:
-        rtype  = "easy"
+    # 3. Already ran today
+    elif ran_today:
+        rtype   = "recovery"
         urgency = "low"
-        reason = "Everything is balanced — a comfortable easy run builds your aerobic base consistently."
+        reason  = "You've already run today — if you want a second session, keep it very easy."
+
+    # 4. Consecutive days: 3+ in a row → mandatory easy
+    elif consecutive >= 3:
+        rtype   = "recovery" if consecutive >= 4 else "easy"
+        urgency = "medium"
+        reason  = (f"You've run {consecutive} days in a row — "
+                   f"{'a rest day or very easy jog' if consecutive >= 4 else 'an easy day'} "
+                   f"protects against injury and lets your body adapt.")
+
+    # 5. Hard/long session yesterday → never suggest another hard session
+    elif recent_hard:
+        rtype   = "easy"
+        urgency = "low"
+        # Explain specifically what they did
+        yesterday_types = [rtype for ds, rtype in all_classified
+                           if ds >= (today - timedelta(days=1)).isoformat()]
+        what = yesterday_types[0] if yesterday_types else "hard"
+        reason = (f"You did a {what} run yesterday — an easy aerobic run today "
+                  f"consolidates the adaptation without adding cumulative fatigue.")
+
+    # 6. Haven't run in several days
+    elif last_any_run >= 5:
+        rtype   = "easy"
+        urgency = "high"
+        reason  = (f"You haven't run in {last_any_run} days — ease back in with a comfortable "
+                   f"aerobic run before returning to quality sessions.")
+
+    # 7. High-volume week → protect with easy
+    elif high_volume_week:
+        rtype   = "easy"
+        urgency = "low"
+        reason  = (f"You're tracking {round(week_km, 1)} km this week "
+                   f"(above your ~{round(avg_weekly_km, 1)} km average) — "
+                   f"an easy run keeps the week strong without overdoing it.")
+
+    # 8. Long run overdue (≥8 days) and not fatigued
+    elif days_since_long >= 8 and not is_fatigued and not recent_hard:
+        rtype   = "long"
+        urgency = "high"
+        ld      = last_date_by_type.get("long")
+        reason  = (f"Your long run was {days_since_long} days ago "
+                   f"({'on ' + ld.strftime('%a %-d %b') if ld else 'a while back'}) — "
+                   f"this is your most important aerobic session of the week.")
+
+    # 9. Tempo overdue (≥6 days) and not fatigued
+    elif days_since_tempo >= 6 and not is_fatigued:
+        rtype   = "tempo"
+        urgency = "medium"
+        reason  = (f"No tempo work in {days_since_tempo} days — "
+                   f"a threshold session is the fastest way to raise your aerobic ceiling.")
+
+    # 10. Intervals overdue (≥10 days) and not fatigued
+    elif days_since_interval >= 10 and not is_fatigued and profile.get("vdot"):
+        rtype   = "interval"
+        urgency = "medium"
+        reason  = (f"Intervals are {days_since_interval} days overdue — "
+                   f"VO₂max work keeps your top-end speed from fading.")
+
+    # 11. Default: easy run
+    else:
+        rtype   = "easy"
+        urgency = "low"
+        reason  = "Training is well balanced — a comfortable easy run builds your aerobic base."
 
     # ── Build pacing for the suggestion ───────────────────────────────────────
     pz = profile.get("pace_zones", {}).get(rtype)
