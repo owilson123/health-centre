@@ -50,6 +50,18 @@ def _max_hr(profile: dict) -> int:
 
 
 # ─────────────────────────── sleep score ───────────────────────────
+#
+# Methodology: Matthew Walker ("Why We Sleep"), Peter Attia ("Outlive"),
+# Huberman Lab, and published polysomnography research.
+#
+# Component weights (total = 1.00):
+#   HRV overnight    25%  — single strongest predictor of autonomic recovery
+#   Duration         20%  — cumulative sleep debt is catastrophic
+#   Deep sleep       20%  — SWS = physical restoration, HGH release, immune function
+#   REM              15%  — emotional regulation, memory, cognitive performance
+#   Efficiency       10%  — consolidated sleep quality
+#   Resting HR        5%  — sympathetic vs parasympathetic balance overnight
+#   Awake time        5%  — sleep fragmentation penalty
 
 def calc_sleep_score(target_date: date = None) -> dict:
     if target_date is None:
@@ -65,140 +77,341 @@ def calc_sleep_score(target_date: date = None) -> dict:
 
         sleep = dict(row)
         total = sleep["total_sleep_seconds"] or 1
+        hours = total / 3600.0
 
-        # 30-day baselines
+        # ── 30-day rolling baselines ─────────────────────────────────────────
         dur_hist = _rolling(conn, "sleep", "total_sleep_seconds")
-        avg_dur = _mean(dur_hist) or total
+        avg_dur  = _mean(dur_hist) or total
 
-        # HRV — read from dedicated hrv table (sleep.hrv_overnight is often NULL)
+        # HRV — prefer dedicated hrv table; fall back to sleep.hrv_overnight
         hrv_row = conn.execute(
             "SELECT hrv_value FROM hrv WHERE date=?", (target_date.isoformat(),)
         ).fetchone()
         hrv_today = hrv_row[0] if hrv_row else sleep.get("hrv_overnight")
-        hrv_hist = _rolling(conn, "hrv", "hrv_value", days=30)
+        hrv_hist  = _rolling(conn, "hrv", "hrv_value", days=30)
         if not hrv_hist:
-            # fall back to sleep table if hrv table is empty
             hrv_hist = _rolling(conn, "sleep", "hrv_overnight")
-        avg_hrv  = _mean(hrv_hist)
-        hrv_sd   = _std(hrv_hist)
+        avg_hrv = _mean(hrv_hist)
+        hrv_sd  = _std(hrv_hist)
 
-        # RHR — read from steps table (sleep.resting_hr is often NULL)
+        # HRV 7-day trend: recent 7-day mean vs prior 7–28 day mean
+        hrv_trend_pct: Optional[float] = None
+        if hrv_hist and len(hrv_hist) >= 7:
+            recent_7  = hrv_hist[-7:]
+            prior_21  = hrv_hist[:-7]
+            if prior_21:
+                r_mean = _mean(recent_7)
+                p_mean = _mean(prior_21)
+                if r_mean and p_mean and p_mean > 0:
+                    hrv_trend_pct = (r_mean - p_mean) / p_mean * 100
+
+        # RHR — prefer steps table; fall back to sleep.resting_hr
         rhr_row = conn.execute(
             "SELECT resting_hr FROM steps WHERE date=? AND resting_hr IS NOT NULL",
             (target_date.isoformat(),)
         ).fetchone()
         rhr_today = rhr_row[0] if rhr_row else sleep.get("resting_hr")
-        rhr_hist = _rolling(conn, "steps", "resting_hr", days=30)
+        rhr_hist  = _rolling(conn, "steps", "resting_hr", days=30)
         if not rhr_hist:
             rhr_hist = _rolling(conn, "sleep", "resting_hr")
         avg_rhr = _mean(rhr_hist)
+        rhr_sd  = _std(rhr_hist)
 
-        # 1. Duration (20%)
-        dur_ratio = total / avg_dur
-        if dur_ratio >= 1.0:
-            dur_score = _clamp(100 - max(0, (dur_ratio - 1.15) * 200))
+        # ── Sleep debt signal: last 3 nights vs baseline ──────────────────────
+        debt_cutoff = (target_date - timedelta(days=3)).isoformat()
+        debt_row = conn.execute("""
+            SELECT AVG(total_sleep_seconds) AS avg3
+            FROM sleep WHERE date > ? AND date < ?
+              AND total_sleep_seconds > 0
+        """, (debt_cutoff, target_date.isoformat())).fetchone()
+        avg_3night = debt_row["avg3"] if debt_row else None
+        sleep_debt_flag = bool(
+            avg_3night and avg_dur and avg_3night < avg_dur * 0.87
+        )
+        sleep_debt_severity = 0.0
+        if sleep_debt_flag and avg_dur and avg_3night:
+            sleep_debt_severity = max(0.0, (avg_dur - avg_3night) / avg_dur)
+
+        # ── 1. Duration (20%) ─────────────────────────────────────────────────
+        # Uses BOTH absolute hours (optimal band 7–9h per Walker) and relative
+        # to personal baseline. Hard floors: < 6h is physiologically damaging.
+        if hours >= 7.0 and hours <= 9.0:
+            abs_score = 100.0
+        elif hours >= 6.0:
+            abs_score = 55.0 + (hours - 6.0) * 45.0        # 55→100 for 6–7h
+        elif hours >= 5.0:
+            abs_score = 20.0 + (hours - 5.0) * 35.0        # 20→55 for 5–6h
+        elif hours > 0:
+            abs_score = max(0.0, hours / 5.0 * 20.0)       # 0→20 for < 5h
         else:
-            dur_score = _clamp(dur_ratio / 1.0 * 100)
+            abs_score = 0.0
+        if hours > 9.0:
+            abs_score = _clamp(100.0 - (hours - 9.0) * 15.0)  # slight over-sleep penalty
 
-        # 2. Efficiency (15%)
-        eff = sleep["efficiency"] or 0
-        if eff > 0:
-            eff_score = _clamp((eff / 95) * 100) if eff <= 95 else 100.0
+        rel_ratio = total / avg_dur
+        if rel_ratio >= 0.93 and rel_ratio <= 1.08:
+            rel_score = 100.0
+        elif rel_ratio >= 0.80:
+            rel_score = 50.0 + (rel_ratio - 0.80) / 0.13 * 50.0
+        elif rel_ratio >= 1.08:
+            rel_score = 100.0 - (rel_ratio - 1.08) * 80.0
         else:
-            eff_score = 50.0  # no data — neutral, don't penalise
+            rel_score = max(0.0, rel_ratio / 0.80 * 50.0)
 
-        # 3. Deep sleep % (20%)
-        deep_pct = (sleep["deep_sleep_seconds"] or 0) / total * 100
-        if 15 <= deep_pct <= 20:
+        # Blend: 65% absolute (universal standard), 35% relative (personal context)
+        dur_score = 0.65 * abs_score + 0.35 * rel_score
+        # Hard cap: < 6h sleep cannot score > 50 regardless of relative context
+        if hours < 6.0:
+            dur_score = min(dur_score, 50.0)
+
+        # ── 2. Efficiency (10%) ───────────────────────────────────────────────
+        # PSG standards: < 75% = clinical insomnia range; > 90% = excellent
+        eff = sleep.get("efficiency") or 0
+        if eff >= 92:
+            eff_score = 100.0
+        elif eff >= 85:
+            eff_score = 70.0 + (eff - 85.0) / 7.0 * 30.0   # 70→100
+        elif eff >= 75:
+            eff_score = 35.0 + (eff - 75.0) / 10.0 * 35.0  # 35→70
+        elif eff > 0:
+            eff_score = max(0.0, eff / 75.0 * 35.0)
+        else:
+            eff_score = 50.0   # no data — neutral
+
+        # ── 3. Deep sleep / SWS (20%) ─────────────────────────────────────────
+        # Walker research: optimal 20–25% of TST (SWS = physical restoration)
+        # < 13%: significantly impaired; > 25%: often recovery from prior debt
+        deep_s   = sleep.get("deep_sleep_seconds") or 0
+        deep_pct = deep_s / total * 100.0
+        if deep_pct >= 20.0 and deep_pct <= 25.0:
             deep_score = 100.0
-        elif deep_pct < 15:
-            deep_score = _clamp((deep_pct / 15) * 100)
+        elif deep_pct >= 13.0 and deep_pct < 20.0:
+            deep_score = 72.0 + (deep_pct - 13.0) / 7.0 * 28.0   # 72→100
+        elif deep_pct > 25.0 and deep_pct <= 32.0:
+            deep_score = 88.0   # above optimal — likely recovery from debt
+        elif deep_pct > 32.0:
+            deep_score = 70.0   # unusually high — could indicate data artefact
+        elif deep_pct >= 5.0:
+            deep_score = deep_pct / 13.0 * 72.0                    # 0→72
         else:
-            deep_score = _clamp(100 - (deep_pct - 20) * 10)
+            deep_score = max(0.0, deep_pct * 2.0)                  # minimal
 
-        # 4. REM % (20%)
-        rem_pct = (sleep["rem_sleep_seconds"] or 0) / total * 100
-        if 20 <= rem_pct <= 25:
+        # ── 4. REM sleep (15%) ────────────────────────────────────────────────
+        # Optimal: 20–25% of TST. Huberman: < 15% impairs emotional regulation.
+        rem_s   = sleep.get("rem_sleep_seconds") or 0
+        rem_pct = rem_s / total * 100.0
+        if rem_pct >= 20.0 and rem_pct <= 27.0:
             rem_score = 100.0
-        elif rem_pct < 20:
-            rem_score = _clamp((rem_pct / 20) * 100)
+        elif rem_pct >= 15.0 and rem_pct < 20.0:
+            rem_score = 65.0 + (rem_pct - 15.0) / 5.0 * 35.0     # 65→100
+        elif rem_pct > 27.0 and rem_pct <= 35.0:
+            rem_score = 85.0   # REM rebound — slightly above optimal
+        elif rem_pct > 35.0:
+            rem_score = 65.0
+        elif rem_pct >= 8.0:
+            rem_score = rem_pct / 15.0 * 65.0                      # 0→65
         else:
-            rem_score = _clamp(100 - (rem_pct - 25) * 8)
+            rem_score = max(0.0, rem_pct * 2.5)
 
-        # 5. Awake penalty (10%)
-        awake_pct = (sleep["awake_seconds"] or 0) / total * 100
-        awake_score = _clamp(100 - (awake_pct / 10) * 100) if awake_pct <= 10 else 0
+        # ── 5. Awake time (5%) ────────────────────────────────────────────────
+        # Use absolute minutes, not percentage — 30 min awake in 8h is different
+        # from 30 min awake in 4h
+        awake_min = (sleep.get("awake_seconds") or 0) / 60.0
+        if awake_min <= 8.0:
+            awake_score = 100.0
+        elif awake_min <= 20.0:
+            awake_score = 100.0 - (awake_min - 8.0) * 4.5         # 100→46
+        elif awake_min <= 45.0:
+            awake_score = 46.0 - (awake_min - 20.0) * 1.6         # 46→6
+        else:
+            awake_score = max(0.0, 6.0 - (awake_min - 45.0) * 0.2)
 
-        # 6. HRV vs baseline (10%) — z-score approach for accuracy
-        if hrv_today and avg_hrv:
+        # ── 6. HRV overnight (25%) ────────────────────────────────────────────
+        # Z-score with asymmetric curve: below baseline hurts more than above
+        # helps (reflects CNS suppression being more impactful than elevation).
+        # Trend bonus: +5 pts if 7-day HRV has been rising (positive adaptation).
+        hrv_pct_vs_baseline: Optional[float] = None
+        if hrv_today and avg_hrv and avg_hrv > 0:
+            hrv_pct_vs_baseline = (hrv_today - avg_hrv) / avg_hrv * 100
             if hrv_sd and hrv_sd > 0:
                 z = (hrv_today - avg_hrv) / hrv_sd
-                hrv_score = _clamp(50 + z * 15)
+                if z >= 0:
+                    hrv_score = _clamp(65.0 + z * 17.5)    # z=0→65, z=2→100
+                elif z >= -1.0:
+                    hrv_score = _clamp(65.0 + z * 28.0)    # z=-1→37
+                else:
+                    hrv_score = _clamp(37.0 + (z + 1.0) * 30.0)  # z=-2→7
             else:
-                hrv_ratio = hrv_today / avg_hrv
-                hrv_score = _clamp(hrv_ratio * 100)
-        else:
-            hrv_score = 50.0
+                # No SD (insufficient history) — use ratio
+                hrv_score = _clamp(50.0 + (hrv_today / avg_hrv - 1.0) * 150.0)
 
-        # 7. Resting HR vs baseline (5%)
+            # HRV trend bonus: rising over 7 days = positive autonomic adaptation
+            if hrv_trend_pct is not None and hrv_trend_pct > 3.0:
+                hrv_score = min(100.0, hrv_score + 5.0)
+        else:
+            hrv_score = 50.0   # insufficient data — neutral
+
+        # ── 7. Resting HR overnight (5%) ──────────────────────────────────────
+        # Z-score relative to personal baseline. Elevated RHR = heightened
+        # sympathetic tone, impaired parasympathetic recovery.
+        rhr_delta: Optional[float] = None
         if rhr_today and avg_rhr:
-            rhr_score = _clamp(100 - ((rhr_today - avg_rhr) / avg_rhr) * 200)
+            rhr_delta = rhr_today - avg_rhr
+            if rhr_sd and rhr_sd > 0:
+                z_rhr = rhr_delta / rhr_sd
+                # Higher RHR = worse score; asymmetric
+                rhr_score = _clamp(70.0 - z_rhr * 22.0)
+                # z=0: 70; z=+1: 48; z=+2: 26; z=-1: 92
+            else:
+                rhr_score = _clamp(100.0 - rhr_delta * 7.0)
         else:
             rhr_score = 50.0
 
+        # ── Weighted score ────────────────────────────────────────────────────
         components = {
-            "duration": round(dur_score),
-            "efficiency": round(eff_score),
-            "deep_sleep": round(deep_score),
-            "rem_sleep": round(rem_score),
+            "hrv":          round(hrv_score),
+            "duration":     round(dur_score),
+            "deep_sleep":   round(deep_score),
+            "rem_sleep":    round(rem_score),
+            "efficiency":   round(eff_score),
+            "resting_hr":   round(rhr_score),
             "awake_penalty": round(awake_score),
-            "hrv": round(hrv_score),
-            "resting_hr": round(rhr_score),
         }
 
-        weights = {"duration": 0.20, "efficiency": 0.15, "deep_sleep": 0.20,
-                   "rem_sleep": 0.20, "awake_penalty": 0.10, "hrv": 0.10, "resting_hr": 0.05}
+        weights = {
+            "hrv":           0.25,
+            "duration":      0.20,
+            "deep_sleep":    0.20,
+            "rem_sleep":     0.15,
+            "efficiency":    0.10,
+            "resting_hr":    0.05,
+            "awake_penalty": 0.05,
+        }
 
-        score = round(sum(components[k] * w for k, w in weights.items()))
+        score = sum(components[k] * weights[k] for k in weights)
 
-        insight = _sleep_insight(components, deep_pct, rem_pct, hrv_today, avg_hrv)
+        # ── Sleep debt penalty ─────────────────────────────────────────────────
+        # 3+ nights of short sleep compounds impairment even if tonight looks OK
+        if sleep_debt_flag:
+            penalty = min(12.0, sleep_debt_severity * 35.0)
+            score   = score - penalty
+
+        score = round(_clamp(score))
+
+        insight = _sleep_insight(
+            components, deep_pct, rem_pct, awake_min, hours, avg_dur / 3600.0,
+            hrv_today, avg_hrv, hrv_pct_vs_baseline, hrv_trend_pct,
+            rhr_today, avg_rhr, rhr_delta, sleep_debt_flag,
+        )
 
         return {
-            "score": score,
-            "components": components,
-            "insight": insight,
-            "data": sleep,
+            "score":       score,
+            "components":  components,
+            "insight":     insight,
+            "data":        sleep,
+            # Extra context for rich UI display
+            "context": {
+                "hours":                round(hours, 1),
+                "deep_pct":             round(deep_pct, 1),
+                "rem_pct":              round(rem_pct, 1),
+                "awake_min":            round(awake_min),
+                "hrv_vs_baseline_pct":  round(hrv_pct_vs_baseline, 1) if hrv_pct_vs_baseline is not None else None,
+                "hrv_trend_pct":        round(hrv_trend_pct, 1) if hrv_trend_pct is not None else None,
+                "rhr_delta":            round(rhr_delta, 1) if rhr_delta is not None else None,
+                "sleep_debt":           sleep_debt_flag,
+            },
         }
 
 
 def _cap(s: str) -> str:
-    """Uppercase first character only, preserving the rest (e.g. HRV, REM stay intact)."""
     return s[0].upper() + s[1:] if s else s
 
 
-def _sleep_insight(c: dict, deep_pct: float, rem_pct: float, hrv: Optional[float], avg_hrv: Optional[float]) -> str:
+def _sleep_insight(
+    c: dict, deep_pct: float, rem_pct: float, awake_min: float,
+    hours: float, avg_hours: float,
+    hrv: Optional[float], avg_hrv: Optional[float],
+    hrv_pct: Optional[float], hrv_trend: Optional[float],
+    rhr: Optional[float], avg_rhr: Optional[float], rhr_delta: Optional[float],
+    debt_flag: bool,
+) -> str:
     parts = []
-    if c["deep_sleep"] >= 80:
-        parts.append("strong deep sleep")
-    elif c["deep_sleep"] < 50:
-        parts.append("low deep sleep")
-    if c["rem_sleep"] >= 80:
-        parts.append("good REM")
-    elif c["rem_sleep"] < 50:
-        parts.append("low REM")
-    if hrv and avg_hrv:
-        if hrv >= avg_hrv:
-            parts.append("HRV above your baseline")
+
+    # HRV — lead with the most important signal
+    if hrv and avg_hrv and hrv_pct is not None:
+        pct_str = f"{'+' if hrv_pct >= 0 else ''}{round(hrv_pct)}%"
+        if hrv_pct >= 10:
+            parts.append(f"HRV {pct_str} above baseline — autonomic recovery was excellent")
+        elif hrv_pct >= 3:
+            parts.append(f"HRV {pct_str} above baseline — good nervous system recovery")
+        elif hrv_pct >= -5:
+            parts.append(f"HRV near baseline ({pct_str}) — recovery was average")
+        elif hrv_pct >= -15:
+            parts.append(f"HRV {pct_str} below baseline — sympathetic nervous system was elevated overnight")
         else:
-            parts.append("HRV below your baseline")
-    if c["efficiency"] < 60:
-        parts.append("sleep efficiency was low")
+            parts.append(f"HRV significantly suppressed ({pct_str}) — your body was under stress during sleep")
+        if hrv_trend is not None and hrv_trend > 4:
+            parts.append(f"7-day HRV trend is rising (+{round(hrv_trend)}%) — positive autonomic adaptation")
+        elif hrv_trend is not None and hrv_trend < -4:
+            parts.append(f"HRV has been declining over 7 days ({round(hrv_trend)}%) — watch cumulative load")
+
+    # Duration
+    if hours < 5.5:
+        parts.append(f"Only {round(hours, 1)}h sleep — severe sleep debt builds rapidly below 6h. Cognitive impairment is measurable.")
+    elif hours < 6.5:
+        parts.append(f"{round(hours, 1)}h sleep — below the 7h minimum. Prioritise an earlier bedtime tonight.")
+    elif hours > 9.5:
+        parts.append(f"{round(hours, 1)}h sleep — above average. This can indicate recovery from prior debt or illness.")
+
+    # Sleep debt
+    if debt_flag:
+        parts.append("3-night sleep debt detected — consecutive short nights compound impairment even if tonight looked OK. Prioritise recovery this week.")
+
+    # Deep sleep
+    if deep_pct < 13:
+        parts.append(f"Deep sleep (SWS) was only {round(deep_pct)}% — well below the 20–25% optimal for physical restoration and HGH release. Avoid alcohol, late meals, and blue light 2h before bed.")
+    elif deep_pct < 18:
+        parts.append(f"Deep sleep at {round(deep_pct)}% — slightly below the 20–25% optimal band.")
+    elif deep_pct >= 20 and deep_pct <= 25:
+        parts.append(f"Deep sleep at {round(deep_pct)}% — within the optimal 20–25% band. Physical restoration was strong.")
+
+    # REM
+    if rem_pct < 15:
+        parts.append(f"REM at {round(rem_pct)}% — below the 20% threshold. Emotional regulation and memory consolidation were compromised.")
+    elif rem_pct >= 20 and rem_pct <= 27:
+        parts.append(f"REM at {round(rem_pct)}% — excellent. Cognitive and emotional restoration was complete.")
+
+    # RHR
+    if rhr and rhr_delta is not None:
+        if rhr_delta >= 5:
+            parts.append(f"Resting HR was {round(rhr_delta)} bpm above your baseline ({round(rhr)} bpm) — elevated sympathetic tone suggests incomplete recovery or early illness.")
+        elif rhr_delta <= -4:
+            parts.append(f"Resting HR {abs(round(rhr_delta))} bpm below baseline — excellent parasympathetic dominance overnight.")
+
+    # Efficiency
+    if c["efficiency"] < 50:
+        parts.append(f"Sleep efficiency was low — significant time awake in bed. Review sleep hygiene and avoid lying in bed when not sleepy.")
+
+    # Awake time
+    if awake_min > 45:
+        parts.append(f"{round(awake_min)} minutes awake during the night — highly fragmented sleep. Consider sleep restriction therapy if this is recurring.")
+
     if not parts:
-        return "Sleep quality was average across all components."
-    return ". ".join(_cap(p) for p in parts) + "."
+        return "Sleep quality was solid across all components."
+    return " ".join(p.rstrip(".") + "." for p in parts)
 
 
 # ─────────────────────────── recovery score ───────────────────────────
+#
+# Methodology: Peter Attia ("Outlive"), Andrew Huberman, Rhonda Patrick,
+# published HRV / autonomic neuroscience research.
+#
+# Component weights (total = 1.00):
+#   HRV              35%  — single best objective readiness signal
+#   Sleep quality    20%  — prior night composite (from calc_sleep_score)
+#   Resting HR       20%  — sympathetic / parasympathetic balance
+#   Body battery     15%  — Garmin's integrated recovery estimate
+#   Stress (prev)    10%  — psychological/physiological load preceding night
 
 def calc_recovery_score(target_date: date = None, sleep_score: Optional[int] = None) -> dict:
     if target_date is None:
@@ -207,87 +420,198 @@ def calc_recovery_score(target_date: date = None, sleep_score: Optional[int] = N
     with db() as conn:
         profile = _get_profile(conn)
 
-        # HRV today
-        hrv_row = conn.execute("SELECT hrv_value FROM hrv WHERE date=?", (target_date.isoformat(),)).fetchone()
+        # ── HRV ──────────────────────────────────────────────────────────────
+        hrv_row = conn.execute(
+            "SELECT hrv_value FROM hrv WHERE date=?", (target_date.isoformat(),)
+        ).fetchone()
         hrv_today = hrv_row[0] if hrv_row else None
 
-        # HRV baseline
-        hrv_hist = _rolling(conn, "hrv", "hrv_value", days=30)
-        hrv_mean = _mean(hrv_hist)
-        hrv_sd = _std(hrv_hist)
+        hrv_hist  = _rolling(conn, "hrv", "hrv_value", days=30)
+        hrv_mean  = _mean(hrv_hist)
+        hrv_sd    = _std(hrv_hist)
 
-        # HRV score (35%)
-        if hrv_today and hrv_mean and hrv_sd:
-            z = (hrv_today - hrv_mean) / max(hrv_sd, 0.1)
-            if z >= -1:
-                hrv_score = _clamp(70 + z * 15)
+        # HRV 7-day trend: recent mean vs prior 21-day mean
+        hrv_trend_pct: Optional[float] = None
+        if hrv_hist and len(hrv_hist) >= 7:
+            recent_7 = hrv_hist[-7:]
+            prior_21 = hrv_hist[:-7]
+            if prior_21:
+                r_m = _mean(recent_7)
+                p_m = _mean(prior_21)
+                if r_m and p_m and p_m > 0:
+                    hrv_trend_pct = (r_m - p_m) / p_m * 100
+
+        # Asymmetric z-score — below baseline hurts more than above helps
+        # Baseline at 60 (not 70): recovery sits lower than pure sleep HRV
+        hrv_pct_vs_baseline: Optional[float] = None
+        if hrv_today and hrv_mean and hrv_mean > 0:
+            hrv_pct_vs_baseline = (hrv_today - hrv_mean) / hrv_mean * 100
+            if hrv_sd and hrv_sd > 0:
+                z = (hrv_today - hrv_mean) / hrv_sd
+                if z >= 0:
+                    hrv_score = _clamp(60.0 + z * 20.0)      # z=0→60, z=2→100
+                elif z >= -1.0:
+                    hrv_score = _clamp(60.0 + z * 25.0)      # z=-1→35
+                else:
+                    hrv_score = _clamp(35.0 + (z + 1.0) * 30.0)  # z=-2→5
             else:
-                hrv_score = _clamp(70 + z * 30)
-        elif hrv_today and hrv_mean:
-            hrv_score = _clamp((hrv_today / hrv_mean) * 70)
+                hrv_score = _clamp(50.0 + (hrv_today / hrv_mean - 1.0) * 150.0)
+
+            # Trend bonus: rising HRV over 7 days = positive adaptation
+            if hrv_trend_pct is not None and hrv_trend_pct > 3.0:
+                hrv_score = min(100.0, hrv_score + 5.0)
         else:
             hrv_score = 50.0
 
-        # Resting HR (25%)
-        rhr_row = conn.execute("SELECT resting_hr FROM steps WHERE date=?", (target_date.isoformat(),)).fetchone()
+        # ── Resting HR (20%) ─────────────────────────────────────────────────
+        # Elevated RHR = heightened sympathetic tone; use z-score for sensitivity
+        rhr_row = conn.execute(
+            "SELECT resting_hr FROM steps WHERE date=? AND resting_hr IS NOT NULL",
+            (target_date.isoformat(),)
+        ).fetchone()
         rhr_today = rhr_row[0] if rhr_row else None
-        rhr_hist = _rolling(conn, "steps", "resting_hr", days=30)
-        rhr_mean = _mean(rhr_hist)
+        rhr_hist  = _rolling(conn, "steps", "resting_hr", days=30)
+        rhr_mean  = _mean(rhr_hist)
+        rhr_sd    = _std(rhr_hist)
+        rhr_delta: Optional[float] = None
+
         if rhr_today and rhr_mean:
-            beats_above = rhr_today - rhr_mean
-            rhr_score = _clamp(100 - beats_above * 5)
+            rhr_delta = rhr_today - rhr_mean
+            if rhr_sd and rhr_sd > 0:
+                z_rhr = rhr_delta / rhr_sd
+                # Elevated RHR → lower score; z=0→65; z=+1→45; z=-1→85
+                rhr_score = _clamp(65.0 - z_rhr * 20.0)
+            else:
+                rhr_score = _clamp(100.0 - rhr_delta * 7.0)
         else:
             rhr_score = 50.0
 
-        # Sleep score (20%) — use passed value or recalculate
+        # ── Sleep score (20%) ─────────────────────────────────────────────────
         if sleep_score is None:
             sleep_result = calc_sleep_score(target_date - timedelta(days=1))
             sleep_score = sleep_result["score"]
 
-        # Body battery start (10%)
-        bb_row = conn.execute("SELECT start_value FROM body_battery WHERE date=?", (target_date.isoformat(),)).fetchone()
-        bb_score = float(bb_row[0]) if bb_row and bb_row[0] else 50.0
+        # ── Body battery (15%) ────────────────────────────────────────────────
+        # Nonlinear curve: ≥75=100, 50–75 linear 60→100, 30–50 linear 30→60, <30 steep
+        bb_row = conn.execute(
+            "SELECT start_value FROM body_battery WHERE date=?", (target_date.isoformat(),)
+        ).fetchone()
+        bb_raw = float(bb_row[0]) if bb_row and bb_row[0] else None
+        if bb_raw is not None:
+            if bb_raw >= 75:
+                bb_score = 100.0
+            elif bb_raw >= 50:
+                bb_score = 60.0 + (bb_raw - 50.0) / 25.0 * 40.0   # 60→100
+            elif bb_raw >= 30:
+                bb_score = 30.0 + (bb_raw - 30.0) / 20.0 * 30.0   # 30→60
+            else:
+                bb_score = max(0.0, bb_raw / 30.0 * 30.0)          # 0→30
+        else:
+            bb_score = 50.0
 
-        # Previous day stress (10%)
-        prev_date = target_date - timedelta(days=1)
-        stress_row = conn.execute("SELECT avg_stress FROM stress WHERE date=?", (prev_date.isoformat(),)).fetchone()
-        stress = stress_row[0] if stress_row else 25
-        stress_score = _clamp(100 - (stress or 25))
+        # ── Stress — relative to personal 30-day baseline (10%) ───────────────
+        # Absolute stress numbers are meaningless; what matters is deviation from
+        # YOUR normal. High-stress person at 50 is fine; low-stress person at 50 is alarming.
+        prev_date    = target_date - timedelta(days=1)
+        stress_row   = conn.execute(
+            "SELECT avg_stress FROM stress WHERE date=?", (prev_date.isoformat(),)
+        ).fetchone()
+        stress_today = stress_row[0] if stress_row else None
+        stress_hist  = _rolling(conn, "stress", "avg_stress", days=30)
+        stress_mean  = _mean(stress_hist)
+        stress_sd    = _std(stress_hist)
+        stress_delta: Optional[float] = None
 
+        if stress_today is not None and stress_mean and stress_mean > 0:
+            stress_delta = stress_today - stress_mean
+            if stress_sd and stress_sd > 0:
+                z_stress = stress_delta / stress_sd
+                # Higher stress → lower score; z=0→70; z=+1→50; z=-1→90
+                stress_score = _clamp(70.0 - z_stress * 20.0)
+            else:
+                # Fallback absolute: stress 25=100, 50=75, 75=50, 100=25
+                stress_score = _clamp(100.0 - (stress_today or 25) * 1.0)
+        elif stress_today is not None:
+            stress_score = _clamp(100.0 - (stress_today or 25) * 1.0)
+        else:
+            stress_score = 70.0   # no data — mildly optimistic neutral
+
+        # ── Weighted composite ────────────────────────────────────────────────
         components = {
-            "hrv": round(hrv_score),
-            "resting_hr": round(rhr_score),
-            "sleep": round(sleep_score),
+            "hrv":          round(hrv_score),
+            "resting_hr":   round(rhr_score),
+            "sleep":        round(sleep_score),
             "body_battery": round(bb_score),
-            "stress": round(stress_score),
+            "stress":       round(stress_score),
         }
 
-        weights = {"hrv": 0.35, "resting_hr": 0.25, "sleep": 0.20, "body_battery": 0.10, "stress": 0.10}
-        score = round(sum(components[k] * w for k, w in weights.items()))
+        weights = {
+            "hrv":          0.35,
+            "resting_hr":   0.20,
+            "sleep":        0.20,
+            "body_battery": 0.15,
+            "stress":       0.10,
+        }
+        score = sum(components[k] * weights[k] for k in weights)
 
-        # ACWR
+        # ── Sleep debt penalty ─────────────────────────────────────────────────
+        # If 3-night rolling average is < 87% of 30-day baseline, we're in debt.
+        # Recovery is fundamentally impaired — cap penalty at 10 pts.
+        dur_hist   = _rolling(conn, "sleep", "total_sleep_seconds")
+        avg_dur    = _mean(dur_hist) or 0
+        debt_cut   = (target_date - timedelta(days=3)).isoformat()
+        debt_row   = conn.execute("""
+            SELECT AVG(total_sleep_seconds) AS avg3 FROM sleep
+            WHERE date > ? AND date < ?
+              AND total_sleep_seconds > 0
+        """, (debt_cut, target_date.isoformat())).fetchone()
+        avg_3night = debt_row["avg3"] if debt_row else None
+        sleep_debt_flag = bool(avg_3night and avg_dur and avg_3night < avg_dur * 0.87)
+        if sleep_debt_flag and avg_dur and avg_3night:
+            debt_severity = max(0.0, (avg_dur - avg_3night) / avg_dur)
+            score -= min(10.0, debt_severity * 30.0)
+
+        # ── ACWR penalty ──────────────────────────────────────────────────────
+        # More aggressive than before: overreaching meaningfully suppresses recovery.
         acwr, acwr_label, acute_load, chronic_load = _calc_acwr(conn, target_date)
 
-        # Apply ACWR penalty
-        if acwr > 1.5:
-            score = round(score * 0.9)
+        if acwr > 1.8:
+            score *= 0.75    # -25%: significant overreaching
+        elif acwr > 1.5:
+            score *= 0.85    # -15%: overreaching
         elif acwr < 0.8:
-            score = round(score * 0.95)
+            score *= 0.97    # -3%: mild detraining signal
 
-        # Target strain
+        score = round(_clamp(score))
+
         target_strain = _recovery_to_target_strain(score)
 
-        insight = _recovery_insight(components, acwr, acwr_label, hrv_today, hrv_mean)
+        insight = _recovery_insight(
+            components, acwr, acwr_label,
+            hrv_today, hrv_mean, hrv_pct_vs_baseline, hrv_trend_pct,
+            rhr_today, rhr_mean, rhr_delta,
+            bb_raw, stress_today, stress_mean, stress_delta,
+            sleep_debt_flag,
+        )
 
         return {
-            "score": _clamp(score),
-            "components": components,
-            "acwr": round(acwr, 2),
-            "acwr_label": acwr_label,
-            "acute_load": acute_load,
-            "chronic_load": chronic_load,
+            "score":         _clamp(score),
+            "components":    components,
+            "acwr":          round(acwr, 2),
+            "acwr_label":    acwr_label,
+            "acute_load":    acute_load,
+            "chronic_load":  chronic_load,
             "target_strain": target_strain,
-            "insight": insight,
+            "insight":       insight,
+            # Rich context for UI / future use
+            "context": {
+                "hrv_vs_baseline_pct": round(hrv_pct_vs_baseline, 1) if hrv_pct_vs_baseline is not None else None,
+                "hrv_trend_pct":       round(hrv_trend_pct, 1) if hrv_trend_pct is not None else None,
+                "rhr_delta":           round(rhr_delta, 1) if rhr_delta is not None else None,
+                "body_battery":        bb_raw,
+                "stress_delta":        round(stress_delta, 1) if stress_delta is not None else None,
+                "sleep_debt":          sleep_debt_flag,
+            },
         }
 
 
@@ -393,21 +717,78 @@ def _recovery_to_target_strain(recovery: float) -> int:
         return round(56 + (recovery - 67) / 33 * 44)
 
 
-def _recovery_insight(c: dict, acwr: float, acwr_label: str, hrv: Optional[float], avg_hrv: Optional[float]) -> str:
+def _recovery_insight(
+    c: dict, acwr: float, acwr_label: str,
+    hrv: Optional[float], avg_hrv: Optional[float],
+    hrv_pct: Optional[float], hrv_trend: Optional[float],
+    rhr: Optional[float], avg_rhr: Optional[float], rhr_delta: Optional[float],
+    bb: Optional[float], stress: Optional[float], avg_stress: Optional[float],
+    stress_delta: Optional[float], debt_flag: bool,
+) -> str:
     parts = []
-    if c["hrv"] >= 75:
-        parts.append("HRV is strong today")
-    elif c["hrv"] < 40:
-        parts.append("HRV is significantly below your baseline")
-    if c["sleep"] < 50:
-        parts.append("poor sleep is dragging recovery down")
-    if acwr > 1.5:
-        parts.append("training load is high — consider an easy day")
+
+    # ── HRV — lead signal ──────────────────────────────────────────────
+    if hrv and avg_hrv and hrv_pct is not None:
+        pct_str = f"{'+' if hrv_pct >= 0 else ''}{round(hrv_pct)}%"
+        if hrv_pct >= 10:
+            parts.append(f"HRV is {pct_str} above baseline — autonomic nervous system is primed. High-quality training recommended.")
+        elif hrv_pct >= 4:
+            parts.append(f"HRV {pct_str} above baseline — good parasympathetic dominance. Green light to train.")
+        elif hrv_pct >= -5:
+            parts.append(f"HRV near baseline ({pct_str}) — recovery is average. Moderate intensity is appropriate.")
+        elif hrv_pct >= -15:
+            parts.append(f"HRV {pct_str} below baseline ({round(hrv)} vs {round(avg_hrv)} ms) — sympathetic tone elevated. Keep today's effort low.")
+        else:
+            parts.append(f"HRV significantly suppressed ({pct_str}, {round(hrv)} vs {round(avg_hrv)} ms) — your system is under stress. Rest or very light movement only.")
+
+        if hrv_trend is not None and hrv_trend > 4:
+            parts.append(f"7-day HRV trending up (+{round(hrv_trend)}%) — positive adaptation to training load.")
+        elif hrv_trend is not None and hrv_trend < -5:
+            parts.append(f"HRV declining over 7 days ({round(hrv_trend)}%) — cumulative fatigue is building. Reduce load this week.")
+
+    # ── RHR ────────────────────────────────────────────────────────────
+    if rhr and rhr_delta is not None and abs(rhr_delta) >= 3:
+        if rhr_delta >= 6:
+            parts.append(f"Resting HR {round(rhr_delta)} bpm above baseline ({round(rhr)} bpm) — could indicate illness, dehydration, or overreaching.")
+        elif rhr_delta >= 3:
+            parts.append(f"Resting HR slightly elevated (+{round(rhr_delta)} bpm) — monitor today; avoid high-intensity work.")
+        elif rhr_delta <= -5:
+            parts.append(f"Resting HR {abs(round(rhr_delta))} bpm below baseline — excellent parasympathetic recovery.")
+
+    # ── Body battery ────────────────────────────────────────────────────
+    if bb is not None:
+        if bb >= 75:
+            parts.append(f"Body battery at {round(bb)} — fully charged.")
+        elif bb < 30:
+            parts.append(f"Body battery at {round(bb)} — critically low. Sleep and recovery are the priority.")
+        elif bb < 50:
+            parts.append(f"Body battery at {round(bb)} — partially depleted. Avoid stacking hard sessions.")
+
+    # ── Sleep score ─────────────────────────────────────────────────────
+    if c["sleep"] < 45:
+        parts.append("Last night's sleep was poor — physical and cognitive performance will be impaired regardless of other metrics.")
+    elif c["sleep"] < 60:
+        parts.append("Sleep quality was below average — consider this when judging perceived effort today.")
+
+    # ── Sleep debt ──────────────────────────────────────────────────────
+    if debt_flag:
+        parts.append("3-night sleep debt detected — consecutive short nights compound cognitive and physical impairment. Recovery this week is non-negotiable.")
+
+    # ── Stress ──────────────────────────────────────────────────────────
+    if stress_delta is not None and stress_delta >= 10:
+        parts.append(f"Yesterday's stress was above your normal ({'+' if stress_delta >= 0 else ''}{round(stress_delta)} vs baseline) — psychological load also impairs recovery.")
+
+    # ── ACWR ────────────────────────────────────────────────────────────
+    if acwr > 1.8:
+        parts.append(f"Training load ratio is {round(acwr, 2)} — significant overreaching territory. Injury risk is elevated. Take a rest day.")
+    elif acwr > 1.5:
+        parts.append(f"Acute:chronic load ratio is {round(acwr, 2)} — approaching overreaching. Ease off this week.")
     elif acwr < 0.8:
-        parts.append("training load is low — you may be undertraining")
+        parts.append(f"Load ratio is low ({round(acwr, 2)}) — you have capacity to add stimulus without risk.")
+
     if not parts:
-        return "Recovery is tracking well. You're in a good position to train."
-    return ". ".join(_cap(p) for p in parts) + "."
+        return "All recovery markers are tracking well. You're in a strong position to train hard today."
+    return " ".join(p.rstrip(".") + "." for p in parts)
 
 
 # ─────────────────────────── strain score ───────────────────────────
