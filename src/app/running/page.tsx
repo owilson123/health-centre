@@ -3,7 +3,7 @@
 import React, { useState, useEffect, useCallback } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import {
-  Play, X, Check, ChevronRight, Trash2, Clock,
+  Play, X, Trash2, Clock,
   TrendingUp, Activity, Zap, Heart, MapPin, RotateCcw,
 } from 'lucide-react'
 import {
@@ -529,17 +529,17 @@ function FitnessStats({ profile }: { profile: RunningProfile }) {
     : '—'
 
   const stats = [
-    { label: 'VDOT', value: profile.vdot ? profile.vdot.toFixed(1) : '—', sub: 'fitness score', icon: TrendingUp, color: 'text-indigo-400' },
-    { label: 'Est. 5K', value: est5kStr, sub: 'mm:ss', icon: Clock, color: 'text-orange-400' },
-    { label: 'This week', value: `${profile.weekly_km}`, sub: 'km', icon: MapPin, color: 'text-emerald-400' },
-    { label: 'Monthly', value: `${profile.monthly_km}`, sub: 'km', icon: Activity, color: 'text-blue-400' },
+    { label: 'VDOT', value: profile.vdot ? profile.vdot.toFixed(1) : '—', icon: TrendingUp, color: 'text-indigo-400' },
+    { label: 'Est. 5K', value: est5kStr, icon: Clock, color: 'text-orange-400' },
+    { label: 'This week', value: `${profile.weekly_km} km`, icon: MapPin, color: 'text-emerald-400' },
+    { label: 'Monthly', value: `${profile.monthly_km} km`, icon: Activity, color: 'text-blue-400' },
   ]
 
   return (
     <div className="px-4 mb-5">
       <p className="text-[10px] font-bold uppercase tracking-widest text-white/25 mb-3">Fitness Overview</p>
       <div className="grid grid-cols-4 gap-2">
-        {stats.map(({ label, value, sub, icon: Icon, color }) => (
+        {stats.map(({ label, value, icon: Icon, color }) => (
           <div key={label} className="bg-white/[0.04] rounded-2xl p-3 text-center border border-white/[0.06]">
             <Icon size={13} className={`mx-auto mb-1.5 ${color}`} />
             <p className="text-base font-bold text-white leading-none">{value}</p>
@@ -609,7 +609,7 @@ function RunHistoryCard({
             )}
           </div>
           {run.notes && (
-            <p className="text-xs text-white/30 mt-1 italic">"{run.notes}"</p>
+            <p className="text-xs text-white/30 mt-1 italic">&ldquo;{run.notes}&rdquo;</p>
           )}
         </div>
         <button

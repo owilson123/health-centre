@@ -995,9 +995,9 @@ function ActiveSession({
     // Remove any superset links involving this exercise
     setSupersetLinks(prev => {
       const next = new Set(prev)
-      for (const key of [...next]) {
+      Array.from(next).forEach(key => {
         if (key.startsWith(`${exId}_`) || key.endsWith(`_${exId}`)) next.delete(key)
-      }
+      })
       return next
     })
   }
