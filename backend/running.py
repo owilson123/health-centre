@@ -169,48 +169,200 @@ COACH_NOTES = {
         "happens in the final third, which is where the real training stimulus is. Stay fuelled."
     ),
     "tempo": (
-        "Warm up 10–15 min easy, hold threshold for 20–40 min, cool down 10 min easy. "
-        "It should feel 'comfortably hard' — controlled discomfort. "
-        "This pace raises your lactate threshold faster than any other session."
+        "Complete your warm-up km at a genuinely easy pace — this is non-negotiable. "
+        "'Comfortably hard' is the target: you can speak in 3–4 word bursts, not full sentences. "
+        "If you feel controlled at tempo pace 5 minutes in, you're nailing it. "
+        "Cool-down km should feel like active recovery, not a continuation of effort."
     ),
     "interval": (
-        "Warm up 15 min easy. Run each rep at a hard, controlled effort — not all-out sprint. "
-        "The recovery jog should be slow enough that you can complete all reps at the same quality. "
-        "Stop the session if pace drops more than 5 sec/km."
+        "Complete every warm-up km before touching interval pace. "
+        "Each rep should feel identical — if rep 4 is noticeably harder than rep 1, "
+        "your recovery jog is too short or your rep pace is too fast. "
+        "Stop the session if pace slips more than 5 sec/km — quality over volume. "
+        "Walk the cool-down km if needed."
     ),
 }
 
 
-def _workout_structure(run_type: str, distance_km: float, pace_lo_s: int, pace_hi_s: int) -> str:
+# ─── Workout structure builders ───────────────────────────────────────────────
+#
+# Warm-up / cool-down expressed in km (not minutes) — derived from the user's
+# actual easy pace.  A 6:00/km runner's 12-min warm-up = 2 km; a 5:00/km
+# runner's same 12 min = 2.4 km.  Much more actionable than a time target.
+
+def _wu_cd_km(easy_pace_s: int | None, wu_min: float = 12, cd_min: float = 10) -> tuple[float, float]:
+    """Convert warm-up / cool-down minutes into km based on easy pace."""
+    pace  = easy_pace_s or 360                          # default 6:00/km
+    wu_km = round((wu_min * 60 / pace) * 2) / 2        # round to nearest 0.5 km
+    cd_km = round((cd_min * 60 / pace) * 2) / 2
+    return max(1.0, wu_km), max(1.0, cd_km)
+
+
+def _interval_structure(
+    distance_km: float,
+    pace_lo_s: int,
+    pace_hi_s: int,
+    easy_pace_s: int | None,
+) -> str:
+    """
+    Select the best interval session for the planned distance.
+
+    Session types (chosen by total distance):
+    ┌──────────────┬──────────────┬──────────────────────────────────────────────┐
+    │ Session      │ Distance     │ Primary stimulus                             │
+    ├──────────────┼──────────────┼──────────────────────────────────────────────┤
+    │ 400m repeats │ ≤ 6 km       │ Speed / neuromuscular — develops leg turnover│
+    │ 800m repeats │ 6–8.5 km     │ VO₂max — the gold-standard interval session  │
+    │ 1000m reps   │ 8.5–11 km    │ VO₂max + threshold — sustained high effort   │
+    │ 1200m reps   │ 11–14 km     │ Threshold / VO₂max crossover                 │
+    │ Mile repeats │ > 14 km      │ Race-specific VO₂max and pace control         │
+    └──────────────┴──────────────┴──────────────────────────────────────────────┘
+    Recovery jog between reps = 400m easy.
+    """
+    wu_km, cd_km = _wu_cd_km(easy_pace_s, wu_min=12, cd_min=10)
+    pace_str     = _fmt_pace(int((pace_lo_s + pace_hi_s) / 2))
+    rec_str      = "400m easy jog"
+
+    if distance_km <= 6.0:
+        # 400m repeats — short, sharp, leg speed
+        work_km = max(1.0, distance_km - wu_km - cd_km)
+        reps    = max(4, min(8, int(work_km * 1000 / (400 + 400))))
+        return (
+            f"{wu_km:.1f} km easy warm-up  →  "
+            f"{reps}×400m @ {pace_str} with {rec_str} between  →  "
+            f"{cd_km:.1f} km easy cool-down"
+        )
+    elif distance_km <= 8.5:
+        # 800m repeats — classic VO₂max session
+        work_km = max(1.0, distance_km - wu_km - cd_km)
+        reps    = max(3, min(6, int(work_km * 1000 / (800 + 400))))
+        return (
+            f"{wu_km:.1f} km easy warm-up  →  "
+            f"{reps}×800m @ {pace_str} with {rec_str} between  →  "
+            f"{cd_km:.1f} km easy cool-down"
+        )
+    elif distance_km <= 11.0:
+        # 1000m repeats — extended VO₂max stimulus
+        work_km = max(1.0, distance_km - wu_km - cd_km)
+        reps    = max(3, min(5, int(work_km * 1000 / (1000 + 400))))
+        return (
+            f"{wu_km:.1f} km easy warm-up  →  "
+            f"{reps}×1000m @ {pace_str} with {rec_str} between  →  "
+            f"{cd_km:.1f} km easy cool-down"
+        )
+    elif distance_km <= 14.0:
+        # 1200m repeats — VO₂max / threshold crossover
+        work_km = max(1.0, distance_km - wu_km - cd_km)
+        reps    = max(3, min(5, int(work_km * 1000 / (1200 + 400))))
+        return (
+            f"{wu_km:.1f} km easy warm-up  →  "
+            f"{reps}×1200m @ {pace_str} with {rec_str} between  →  "
+            f"{cd_km:.1f} km easy cool-down"
+        )
+    else:
+        # Mile (1600m) repeats — elite VO₂max development
+        work_km = max(1.0, distance_km - wu_km - cd_km)
+        reps    = max(3, min(5, int(work_km * 1000 / (1600 + 400))))
+        return (
+            f"{wu_km:.1f} km easy warm-up  →  "
+            f"{reps}×1600m @ {pace_str} with {rec_str} between  →  "
+            f"{cd_km:.1f} km easy cool-down"
+        )
+
+
+def _tempo_structure(
+    distance_km: float,
+    pace_lo_s: int,
+    pace_hi_s: int,
+    easy_pace_s: int | None,
+) -> str:
+    """
+    Select the best tempo session for the planned distance.
+
+    Session types (chosen by total distance):
+    ┌────────────────────┬──────────────┬───────────────────────────────────────────┐
+    │ Session            │ Distance     │ Best for                                  │
+    ├────────────────────┼──────────────┼───────────────────────────────────────────┤
+    │ Tempo repeats      │ ≤ 7 km       │ Building sustained threshold tolerance    │
+    │ Cruise intervals   │ 7–10 km      │ Classic Daniels T-pace; high quality vol  │
+    │ Sustained tempo    │ 10–14 km     │ Race-specific threshold — single block     │
+    │ Progressive tempo  │ > 14 km      │ Negative-split race simulation            │
+    └────────────────────┴──────────────┴───────────────────────────────────────────┘
+    """
+    wu_km, cd_km = _wu_cd_km(easy_pace_s, wu_min=12, cd_min=10)
+    pace_str     = f"{_fmt_pace(pace_lo_s)}–{_fmt_pace(pace_hi_s)}"
+    work_km      = max(1.0, distance_km - wu_km - cd_km)
+
+    if distance_km <= 7.0:
+        # Tempo repeats — 3 reps of N min with short easy jog between
+        # Each rep ≈ work_km/3 distance; jog between ≈ 0.5 km
+        rep_km   = max(0.8, round(work_km / 3 / 0.5) * 0.5)   # round to 0.5 km
+        jog_km   = round((120 / (easy_pace_s or 360)), 1)       # ~2 min easy jog
+        return (
+            f"{wu_km:.1f} km easy warm-up  →  "
+            f"3×{rep_km:.1f} km @ {pace_str} with {jog_km:.1f} km easy jog between  →  "
+            f"{cd_km:.1f} km easy cool-down"
+        )
+    elif distance_km <= 10.0:
+        # Cruise intervals — 2 blocks with a short easy km between (classic Daniels)
+        rep_km = max(1.5, round(work_km / 2 / 0.5) * 0.5)
+        jog_km = max(0.5, round((120 / (easy_pace_s or 360)) * 2) / 2)
+        return (
+            f"{wu_km:.1f} km easy warm-up  →  "
+            f"2×{rep_km:.1f} km @ {pace_str} with {jog_km:.1f} km easy between  →  "
+            f"{cd_km:.1f} km easy cool-down"
+        )
+    elif distance_km <= 14.0:
+        # Sustained continuous tempo — single unbroken block
+        return (
+            f"{wu_km:.1f} km easy warm-up  →  "
+            f"{work_km:.1f} km continuous @ {pace_str}  →  "
+            f"{cd_km:.1f} km easy cool-down"
+        )
+    else:
+        # Progressive tempo / negative-split long effort
+        easy_km   = round(work_km * 0.40 / 0.5) * 0.5
+        mid_km    = round(work_km * 0.30 / 0.5) * 0.5
+        tempo_km  = max(1.0, round((work_km - easy_km - mid_km) / 0.5) * 0.5)
+        mid_pace  = _fmt_pace(int((easy_pace_s or 360) * 0.90))  # ~marathon pace
+        return (
+            f"{wu_km:.1f} km easy warm-up  →  "
+            f"{easy_km:.1f} km easy  →  "
+            f"{mid_km:.1f} km @ marathon pace ({mid_pace})  →  "
+            f"{tempo_km:.1f} km @ tempo pace ({pace_str})  →  "
+            f"{cd_km:.1f} km easy cool-down"
+        )
+
+
+def _workout_structure(
+    run_type: str,
+    distance_km: float,
+    pace_lo_s: int,
+    pace_hi_s: int,
+    easy_pace_s: int | None = None,
+) -> str:
+    """Route to the correct session builder based on run type."""
     if run_type == "interval":
-        rep_dist   = 800  # metres
-        # Total reps: roughly half the distance as work, other half warm/cool/recovery
-        work_km    = distance_km * 0.55
-        reps       = max(4, min(10, int(work_km * 1000 / rep_dist)))
-        rep_pace   = _fmt_pace(int((pace_lo_s + pace_hi_s) / 2 * rep_dist / 1000 / rep_dist * 1000))
-        return (
-            f"15 min easy warm-up  →  "
-            f"{reps}×{rep_dist}m @ {rep_pace} with 90s recovery jog  →  "
-            f"10 min easy cool-down"
-        )
+        return _interval_structure(distance_km, pace_lo_s, pace_hi_s, easy_pace_s)
     elif run_type == "tempo":
-        sustained_min = max(20, min(40, int(distance_km * 0.6 * (pace_lo_s + pace_hi_s) / 2 / 60)))
-        return (
-            f"10–15 min easy warm-up  →  "
-            f"{sustained_min} min at {_fmt_pace(pace_lo_s)}–{_fmt_pace(pace_hi_s)}  →  "
-            f"10 min easy cool-down"
-        )
+        return _tempo_structure(distance_km, pace_lo_s, pace_hi_s, easy_pace_s)
     elif run_type == "long":
-        split_km = distance_km / 2
+        wu_km, cd_km = _wu_cd_km(easy_pace_s, wu_min=10, cd_min=8)
+        split_km = round((distance_km - wu_km) / 2 / 0.5) * 0.5
         return (
-            f"First {split_km:.0f} km at {_fmt_pace(pace_hi_s)} (easy)  →  "
-            f"Final {split_km:.0f} km at {_fmt_pace(pace_lo_s)} (slightly quicker) — "
-            f"negative split"
+            f"{wu_km:.1f} km easy to settle in  →  "
+            f"{split_km:.1f} km at {_fmt_pace(pace_hi_s)} (comfortable)  →  "
+            f"{split_km:.1f} km at {_fmt_pace(pace_lo_s)} (negative split — slightly quicker)  →  "
+            f"Walk the final {cd_km:.1f} km to cool down"
         )
-    else:  # recovery
+    else:  # recovery / easy
+        wu_km, cd_km = _wu_cd_km(easy_pace_s, wu_min=8, cd_min=5)
+        run_km = max(1.0, distance_km - wu_km - cd_km)
         return (
-            f"Run the full {distance_km:.0f} km at {_fmt_pace(pace_hi_s)}–{_fmt_pace(pace_lo_s)}.  "
-            f"Walk breaks are fine and encouraged if HR climbs."
+            f"Walk {0.5:.1f} km to warm up  →  "
+            f"Run {run_km:.1f} km at {_fmt_pace(pace_hi_s)}–{_fmt_pace(pace_lo_s)} — "
+            f"walk whenever HR climbs above zone 2  →  "
+            f"Walk {0.5:.1f} km cool-down"
         )
 
 
@@ -681,9 +833,10 @@ def _smart_suggest(conn, profile: dict) -> dict:
     hr = profile.get("hr_zones",   {}).get(rtype, [0, 0])
     dist = DEFAULT_DISTANCES[rtype]
 
+    easy_pz_s = (profile.get("pace_zones", {}).get("easy") or {}).get("pace_s_km")
     structure = ""
     if pz:
-        structure = _workout_structure(rtype, dist, pz["pace_low_s_km"], pz["pace_high_s_km"])
+        structure = _workout_structure(rtype, dist, pz["pace_low_s_km"], pz["pace_high_s_km"], easy_pz_s)
 
     return {
         "type":             rtype,
@@ -705,9 +858,10 @@ def _pacing_plan(profile: dict, run_type: str, distance_km: float) -> dict:
     hr = profile.get("hr_zones", {}).get(run_type, [0, 0])
     vdot = profile.get("vdot")
 
+    easy_pz_s = (profile.get("pace_zones", {}).get("easy") or {}).get("pace_s_km")
     structure = ""
     if pz:
-        structure = _workout_structure(run_type, distance_km, pz["pace_low_s_km"], pz["pace_high_s_km"])
+        structure = _workout_structure(run_type, distance_km, pz["pace_low_s_km"], pz["pace_high_s_km"], easy_pz_s)
 
     basis = None
     if vdot:

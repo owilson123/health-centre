@@ -89,18 +89,35 @@ function PaceDisplay({ zone, color }: {
 function WorkoutStructure({ structure, color }: { structure: string; color: string }) {
   if (!structure) return null
   const parts = structure.split('→').map(s => s.trim()).filter(Boolean)
+
+  // Detect warm-up / cool-down segments by keyword — these get a dim dot
+  const isTransition = (s: string) => {
+    const l = s.toLowerCase()
+    return (
+      l.includes('warm-up') || l.includes('warm up') || l.includes('cool-down') ||
+      l.includes('cool down') || l.startsWith('walk')
+    )
+  }
+
   return (
-    <div className="space-y-1.5">
-      {parts.map((part, i) => (
-        <div key={i} className="flex items-start gap-2.5">
-          <div
-            className={`w-1.5 h-1.5 rounded-full mt-1.5 flex-shrink-0 ${
-              i === 0 ? 'bg-white/20' : i === parts.length - 1 ? 'bg-white/20' : TYPE_CONFIG[color]?.dot ?? 'bg-indigo-400'
-            }`}
-          />
-          <p className="text-sm text-white/70 leading-snug">{part}</p>
-        </div>
-      ))}
+    <div className="space-y-2">
+      {parts.map((part, i) => {
+        const transition = isTransition(part)
+        return (
+          <div key={i} className={`flex items-start gap-2.5 ${transition ? 'opacity-60' : ''}`}>
+            <div
+              className={`w-1.5 h-1.5 rounded-full mt-1.5 flex-shrink-0 flex-shrink-0 ${
+                transition
+                  ? 'bg-white/25'
+                  : (TYPE_CONFIG[color]?.dot ?? 'bg-indigo-400')
+              }`}
+            />
+            <p className={`text-sm leading-snug ${transition ? 'text-white/55' : 'text-white/80 font-medium'}`}>
+              {part}
+            </p>
+          </div>
+        )
+      })}
     </div>
   )
 }
