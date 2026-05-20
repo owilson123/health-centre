@@ -252,17 +252,83 @@ class SetLog(BaseModel):
 
 
 # ─── DUP recommendation engine ───────────────────────────────────────────────
+#
+# Philosophy (pro strength + bodybuilding coach approach):
+#   • COMPOUND movements → strength-focused DUP cycling.
+#     These are your primary strength builders — progressive overload on the
+#     big lifts (bench, squat, deadlift, row, OHP, etc.) is the #1 driver of
+#     long-term muscle and strength gains. Keep them heavy, keep them cycling.
+#   • ACCESSORY movements → hypertrophy-focused double progression.
+#     Accessories exist to add volume, address weak points, and maximise muscle
+#     damage / metabolic stress. They should ALWAYS live in the 8–15 rep range
+#     at RPE 8. Putting a lateral raise in a "Power" block is counterproductive.
+#
+# Compound DUP (4-block strength cycle based on Prilepin / Zatsiorsky loading):
+#   Block 1 — Accumulation:   4×5-7  @ ~75%  — build work capacity, learn the pattern
+#   Block 2 — Intensification: 4×4-6  @ ~82%  — move heavier, drop reps slightly
+#   Block 3 — Intensification+: 5×3-5 @ ~86%  — peak strength expression
+#   Block 4 — Power:           4×2-3  @ ~90%  — maximal CNS recruitment, peaking
+#
+# Accessory hypertrophy (3-block double-progression):
+#   Block 1 — Volume:    3×12-15 @ ~60% — high reps, mind-muscle connection
+#   Block 2 — Volume+:   4×10-12 @ ~67% — add a set, slightly heavier
+#   Block 3 — Density:   4×8-10  @ ~72% — same volume, heavier load
+#   → Once you hit top of the rep range on ALL sets, weight goes up next session.
 
-# Three DUP phases that cycle: Hypertrophy → Strength → Power → repeat.
-# Percentages and rep ranges calibrated for intermediate-to-advanced strength
-# athletes (think: Prilepin / Zatsiorsky loading zones).
-# rir = Reps In Reserve target; rpe = Rate of Perceived Exertion target.
-# Pattern deliberately weights Strength: Hyp → Str → Str → Power → repeat (4-block).
-DUP_PHASES = [
-    {"name": "Hypertrophy", "sets": 4, "reps_low": 8,  "reps_high": 12, "pct": 0.675, "rir": 2, "rpe": "8"},
-    {"name": "Strength",    "sets": 5, "reps_low": 3,  "reps_high": 5,  "pct": 0.855, "rir": 1, "rpe": "9"},
-    {"name": "Strength",    "sets": 5, "reps_low": 3,  "reps_high": 5,  "pct": 0.875, "rir": 1, "rpe": "9"},
-    {"name": "Power",       "sets": 5, "reps_low": 2,  "reps_high": 3,  "pct": 0.905, "rir": 0, "rpe": "9-10"},
+# ── Compound movements: programmed for STRENGTH ──────────────────────────────
+# These exercises directly determine your structural strength. Heavy, low-rep
+# progressive overload is the optimal stimulus.
+COMPOUND_MOVEMENTS = {
+    # Push — upper compound
+    "Barbell Bench Press", "Incline Barbell Bench Press", "Decline Barbell Bench Press",
+    "Close-Grip Bench Press", "Paused Bench Press", "Spoto Press",
+    "Overhead Press", "Push Press",
+    "Dumbbell Bench Press", "Incline Dumbbell Press",
+    # Pull — upper compound
+    "Barbell Row", "Pendlay Row", "T-Bar Row",
+    "Deadlift", "Sumo Deadlift", "Deficit Deadlift", "Rack Pull",
+    "Romanian Deadlift", "Trap Bar Deadlift",
+    "Pull-Up", "Chin-Up",
+    "Lat Pulldown", "Wide-Grip Lat Pulldown",
+    # Legs — lower compound
+    "Squat", "Front Squat", "Paused Squat", "Sumo Squat",
+    "Hip Thrust", "Good Morning",
+    "Leg Press", "Hack Squat",
+    "Bulgarian Split Squat",
+}
+
+# Lower-body compounds get larger overload increments (bigger muscles,
+# longer adaptation curves, bigger plates)
+LOWER_BODY_COMPOUNDS = {
+    "Squat", "Front Squat", "Paused Squat", "Sumo Squat",
+    "Deadlift", "Sumo Deadlift", "Deficit Deadlift", "Rack Pull",
+    "Romanian Deadlift", "Trap Bar Deadlift",
+    "Good Morning", "Hip Thrust",
+    "Leg Press", "Hack Squat",
+    "Bulgarian Split Squat",
+}
+
+# Compound strength DUP — 4 blocks, Prilepin-calibrated percentages
+COMPOUND_DUP_PHASES = [
+    # Block 1: Accumulation — volume at moderate intensity
+    {"name": "Strength",  "sets": 4, "reps_low": 5, "reps_high": 7, "pct": 0.755, "rir": 2, "rpe": "7-8"},
+    # Block 2: Intensification — drop reps, add weight
+    {"name": "Strength",  "sets": 4, "reps_low": 4, "reps_high": 6, "pct": 0.820, "rir": 2, "rpe": "8-9"},
+    # Block 3: Intensification+ — close to maximal sets
+    {"name": "Strength",  "sets": 5, "reps_low": 3, "reps_high": 5, "pct": 0.860, "rir": 1, "rpe": "9"},
+    # Block 4: Power / Peak — near-maximal CNS recruitment
+    {"name": "Power",     "sets": 4, "reps_low": 2, "reps_high": 3, "pct": 0.900, "rir": 0, "rpe": "9-10"},
+]
+
+# Accessory hypertrophy DUP — 3 blocks, always in hypertrophy rep territory
+# Double-progression model: once all sets hit reps_high, increase weight.
+ACCESSORY_DUP_PHASES = [
+    # Block 1: Volume — establish mind-muscle connection at higher reps
+    {"name": "Hypertrophy", "sets": 3, "reps_low": 12, "reps_high": 15, "pct": 0.600, "rir": 2, "rpe": "8"},
+    # Block 2: Volume+ — one more set, slightly heavier
+    {"name": "Hypertrophy", "sets": 4, "reps_low": 10, "reps_high": 12, "pct": 0.670, "rir": 2, "rpe": "8"},
+    # Block 3: Density — heavier load, tighter rep range
+    {"name": "Hypertrophy", "sets": 4, "reps_low": 8,  "reps_high": 10, "pct": 0.720, "rir": 1, "rpe": "8-9"},
 ]
 
 # Anchor lift names for each category
@@ -480,6 +546,38 @@ def _epley_1rm(weight: float, reps: int) -> float:
     return weight * (1 + reps / 30)
 
 
+def _overload_increment(exercise_name: str) -> float:
+    """
+    Return the appropriate progressive overload increment (kg).
+
+    Pro coaching logic:
+    • Lower-body barbell compounds (squat, deadlift, hip thrust, leg press):
+        +2.5 kg/session = +5 kg on the bar (2×2.5 kg plates). Larger muscles,
+        longer adaptation, can sustain bigger jumps.
+    • Upper-body barbell compounds (bench, row, OHP):
+        +2.5 kg/session. Standard plate increment.
+    • Compound dumbbell (DB bench, incline DB, dumbbell row):
+        +2.0 kg per hand. Jumps of 2 kg are the smallest practical DB increment.
+    • Isolation dumbbell (curls, lateral raise, fly, kickback, etc.):
+        +1.25 kg per hand. Fine motor control exercises adapt slower; big jumps
+        break form. If the gym only has 2 kg increments, round up.
+    • Cable & machine isolation (pushdown, cable fly, leg curl, etc.):
+        +2.5 kg — stack-based, easy to increment.
+    """
+    per_hand  = exercise_name in DUMBBELL_PER_HAND
+    is_lower  = exercise_name in LOWER_BODY_COMPOUNDS
+    is_compound = exercise_name in COMPOUND_MOVEMENTS
+
+    if is_lower:
+        return 2.5   # = +5 kg total on bar
+    elif per_hand and is_compound:
+        return 2.0   # compound dumbbell per hand
+    elif per_hand:
+        return 1.25  # isolation dumbbell per hand
+    else:
+        return 2.5   # upper barbell compound, cable, machine, barbell isolation
+
+
 def _progressive_overload(
     conn,
     exercise_id: int,
@@ -488,21 +586,19 @@ def _progressive_overload(
     reps_high: int,
 ) -> tuple[float | None, str, float | None]:
     """
-    Analyse the user's last session for this exercise and suggest progressive
-    overload weight.  Returns (weight_kg, context_note, estimated_1rm) or
-    (None, "", None) if not enough history.
+    Analyse the last 2 sessions for this exercise and prescribe weight.
+    Returns (weight_kg, context_note, estimated_1rm) or (None, "", None).
 
-    Rules (sports-science standard):
-    • Hit top of rep range on all sets → add weight
-      - Barbell compound: +2.5 kg
-      - Barbell isolation / cable / machine: +2.5 kg
-      - Dumbbell (per hand): +1.25 kg
-    • Hit bottom of rep range but not top → maintain (build reps first)
-    • Failed to reach bottom of rep range → micro-deload 5 %
-    • No history yet → return None (caller falls back to anchor scaling)
+    Pro-coaching progressive overload rules:
+    • All sets hit TOP of rep range    → add weight next session
+    • Sets within rep range (not max)  → hold weight, build reps (double progression)
+    • ONE session below bottom of range → hold weight with a form / fatigue note
+    • TWO sessions in a row below range → 10% deload (overreaching, reset properly)
+
+    Increment scale: see _overload_increment().
     """
     rows = conn.execute("""
-        SELECT ws.weight_kg, ws.reps, ws.session_id
+        SELECT ws.weight_kg, ws.reps, ws.session_id, sess.started_at
         FROM workout_sets ws
         JOIN workout_sessions sess ON sess.id = ws.session_id
         WHERE ws.exercise_id = ?
@@ -510,47 +606,91 @@ def _progressive_overload(
           AND ws.weight_kg IS NOT NULL AND ws.weight_kg > 0
           AND ws.reps > 0
         ORDER BY sess.started_at DESC
-        LIMIT 30
+        LIMIT 50
     """, (exercise_id,)).fetchall()
 
     if not rows:
         return None, "", None
 
-    # Isolate the most recent session's sets
-    last_sid = rows[0]["session_id"]
-    last_sets = [r for r in rows if r["session_id"] == last_sid]
-    if not last_sets:
-        return None, "", None
+    # ── Group into sessions (most recent first) ───────────────────────────────
+    sessions: dict[int, list] = {}
+    for r in rows:
+        sessions.setdefault(r["session_id"], []).append(r)
 
-    # Working weight = median weight across last session's sets
-    weights = sorted(r["weight_kg"] for r in last_sets)
+    session_ids = list(dict.fromkeys(r["session_id"] for r in rows))  # ordered unique
+    last_sid    = session_ids[0]
+    prev_sid    = session_ids[1] if len(session_ids) > 1 else None
+
+    last_sets = sessions[last_sid]
+    prev_sets = sessions[prev_sid] if prev_sid else []
+
+    # Working weight = median of last session (ignore warmup outliers)
+    weights     = sorted(r["weight_kg"] for r in last_sets)
     last_weight = weights[len(weights) // 2]
-    avg_reps = sum(r["reps"] for r in last_sets) / len(last_sets)
+    avg_reps    = sum(r["reps"] for r in last_sets) / len(last_sets)
 
-    # Best 1RM estimate from all history
+    # Best 1RM from all history
     all_sets = [r for r in rows if r["weight_kg"] and r["reps"]]
-    est_1rm = max((_epley_1rm(r["weight_kg"], r["reps"]) for r in all_sets), default=None)
+    est_1rm  = max((_epley_1rm(r["weight_kg"], r["reps"]) for r in all_sets), default=None)
     if est_1rm:
         est_1rm = round(est_1rm, 1)
 
-    per_hand = exercise_name in DUMBBELL_PER_HAND
-    increment = 1.25 if per_hand else 2.5
+    per_hand  = exercise_name in DUMBBELL_PER_HAND
+    increment = _overload_increment(exercise_name)
 
+    # ── Decision tree ─────────────────────────────────────────────────────────
     if avg_reps >= reps_high:
-        new_weight = _round_weight(last_weight + increment)
-        context = f"↑ {new_weight:g} kg — up {increment:g} kg (you hit {round(avg_reps)} reps last session)"
+        # Hit the ceiling → add weight
+        new_weight = _round_weight(last_weight + increment, per_hand)
+        unit_str   = "kg/hand" if per_hand else "kg"
+        context    = (
+            f"↑ {new_weight:g} {unit_str} — +{increment:g} kg "
+            f"(all sets hit {round(avg_reps)} reps — you earned the jump)"
+        )
+
     elif avg_reps >= reps_low:
-        new_weight = _round_weight(last_weight)
-        context = f"= {new_weight:g} kg — build reps to {reps_high} before adding weight"
+        # In range but not maxed — hold weight, chase more reps
+        new_weight = _round_weight(last_weight, per_hand)
+        unit_str   = "kg/hand" if per_hand else "kg"
+        context    = (
+            f"= {new_weight:g} {unit_str} — build to {reps_high} reps before increasing "
+            f"(hit {round(avg_reps)} last session)"
+        )
+
     else:
-        new_weight = _round_weight(last_weight * 0.95)
-        context = f"↓ {new_weight:g} kg — slight back-off (reps were short last session)"
+        # Below the bottom — check previous session
+        prev_avg_reps = None
+        if prev_sets:
+            prev_avg_reps = sum(r["reps"] for r in prev_sets) / len(prev_sets)
+
+        if prev_avg_reps is not None and prev_avg_reps < reps_low:
+            # Two consecutive sessions below range → proper 10% deload
+            new_weight = _round_weight(last_weight * 0.90, per_hand)
+            unit_str   = "kg/hand" if per_hand else "kg"
+            context    = (
+                f"↓ {new_weight:g} {unit_str} — 10% deload "
+                f"(2 sessions below {reps_low} reps; rebuild from here)"
+            )
+        else:
+            # Single bad session — hold weight, investigate cause
+            new_weight = _round_weight(last_weight, per_hand)
+            unit_str   = "kg/hand" if per_hand else "kg"
+            context    = (
+                f"= {new_weight:g} {unit_str} — hold weight "
+                f"(only {round(avg_reps)} reps last session; check fatigue / technique)"
+            )
 
     return new_weight, context, est_1rm
 
 
-def _round_weight(kg: float) -> float:
-    """Round to nearest 2.5 kg plate increment."""
+def _round_weight(kg: float, per_hand: bool = False) -> float:
+    """
+    Round to nearest practical increment.
+    Dumbbells: 2 kg steps (most gym DB racks increment by 2 kg).
+    Barbells / cables / machines: 2.5 kg steps.
+    """
+    if per_hand:
+        return round(kg / 2.0) * 2.0
     return round(kg / 2.5) * 2.5
 
 
@@ -580,21 +720,44 @@ def _best_1rm(conn, exercise_name: str) -> float | None:
     return round(best, 1)
 
 
-def _dup_phase(conn, category: str) -> dict:
+def _dup_phase(conn, category: str, is_compound: bool) -> dict:
     """
-    Determine which DUP phase to prescribe next.
-    Count completed sessions that contained exercises of this category,
-    advance through Hypertrophy → Strength → Power cyclically.
+    Return the correct DUP phase for this exercise type.
+
+    Compounds and accessories cycle INDEPENDENTLY — a Push day has bench press
+    in Strength Block 3 AND cable flies in Hypertrophy Block 2 simultaneously.
+    That is correct and intentional: heavy compounds don't gate accessory phasing.
+
+    Compound session count: sessions where a compound exercise of this category
+    was logged (most sessions, but not ad-hoc accessory-only days).
+    Accessory session count: all finished sessions with any exercise of this category.
     """
-    row = conn.execute("""
-        SELECT COUNT(DISTINCT ws.session_id) as n
-        FROM workout_sets ws
-        JOIN exercises e ON e.id = ws.exercise_id
-        JOIN workout_sessions sess ON sess.id = ws.session_id
-        WHERE e.category = ? AND sess.finished_at IS NOT NULL
-    """, (category,)).fetchone()
+    phases = COMPOUND_DUP_PHASES if is_compound else ACCESSORY_DUP_PHASES
+
+    if is_compound:
+        # Count sessions that contained at least one compound exercise of this category
+        compound_names = [n for n in COMPOUND_MOVEMENTS if _EXERCISE_CATEGORY.get(n) == category]
+        if not compound_names:
+            compound_names = list(COMPOUND_MOVEMENTS)
+        ph = ",".join("?" * len(compound_names))
+        row = conn.execute(f"""
+            SELECT COUNT(DISTINCT ws.session_id) AS n
+            FROM workout_sets ws
+            JOIN exercises e ON e.id = ws.exercise_id
+            JOIN workout_sessions sess ON sess.id = ws.session_id
+            WHERE e.category = ? AND e.name IN ({ph}) AND sess.finished_at IS NOT NULL
+        """, (category, *compound_names)).fetchone()
+    else:
+        row = conn.execute("""
+            SELECT COUNT(DISTINCT ws.session_id) AS n
+            FROM workout_sets ws
+            JOIN exercises e ON e.id = ws.exercise_id
+            JOIN workout_sessions sess ON sess.id = ws.session_id
+            WHERE e.category = ? AND sess.finished_at IS NOT NULL
+        """, (category,)).fetchone()
+
     n = row["n"] if row else 0
-    return DUP_PHASES[n % len(DUP_PHASES)]
+    return phases[n % len(phases)]
 
 
 def _dup_recommendation(
@@ -606,22 +769,32 @@ def _dup_recommendation(
     """
     Build a DUP + progressive-overload recommendation for an exercise.
 
+    Compound movements → strength-biased DUP (heavy, low-rep, cycling).
+    Accessory movements → hypertrophy-biased double progression (8–15 rep range).
+
     Priority order:
-    1. User has history for this specific exercise → progressive overload
-       (add/hold/deload based on reps hit last session).
-    2. No history yet → anchor-lift scaling (existing approach) so new
-       exercises still get a sensible first-session target.
+    1. User has logged history → progressive overload (add / hold / deload).
+    2. No history → anchor-lift scaling so first sessions get a sensible target.
 
     Returns None only when there is genuinely no data and no anchor available.
     """
-    phase = _dup_phase(conn, category)
-    per_hand = exercise_name in DUMBBELL_PER_HAND
+    is_compound = exercise_name in COMPOUND_MOVEMENTS
+    per_hand    = exercise_name in DUMBBELL_PER_HAND
 
-    rir_note = (
-        f"RPE {phase['rpe']} · leave {phase['rir']} rep{'s' if phase['rir'] != 1 else ''} in reserve"
-        if phase["rir"] > 0
-        else f"RPE {phase['rpe']} · near-maximal effort"
-    )
+    phase = _dup_phase(conn, category, is_compound)
+
+    # ── Coaching context string ───────────────────────────────────────────────
+    if phase["rir"] > 0:
+        effort_note = (
+            f"RPE {phase['rpe']} · {phase['rir']} rep{'s' if phase['rir'] != 1 else ''} in reserve"
+        )
+    else:
+        effort_note = f"RPE {phase['rpe']} · near-maximal effort — grind hard"
+
+    if is_compound:
+        goal_note = "Strength focus — heavy, controlled reps, full range of motion"
+    else:
+        goal_note = "Hypertrophy focus — chase the pump, slow eccentric, squeeze the muscle"
 
     # ── Path 1: Progressive overload from logged history ─────────────────────
     if exercise_id is not None:
@@ -638,12 +811,18 @@ def _dup_recommendation(
                 "per_hand":    per_hand,
                 "anchor_name": exercise_name,
                 "anchor_1rm":  est_1rm,
-                "note":        f"{prog_context} · {rir_note}",
+                "note":        f"{prog_context} · {effort_note}",
                 "source":      "progressive_overload",
             }
 
     # ── Path 2: Bodyweight / Core — reps only ────────────────────────────────
     if exercise_name in SCALE and SCALE[exercise_name] is None:
+        # Compounds like Pull-Up / Chin-Up: use strength rep range even unweighted
+        bw_note = (
+            f"{goal_note} · {effort_note}"
+            if is_compound
+            else f"Quality reps, full ROM · {effort_note}"
+        )
         return {
             "phase":       phase["name"],
             "sets":        phase["sets"],
@@ -653,7 +832,7 @@ def _dup_recommendation(
             "per_hand":    False,
             "anchor_name": None,
             "anchor_1rm":  None,
-            "note":        f"Quality reps · {rir_note}",
+            "note":        bw_note,
             "source":      "bodyweight",
         }
 
@@ -670,7 +849,6 @@ def _dup_recommendation(
             scale = DEFAULT_CATEGORY_SCALE.get(category)
 
     if scale is None:
-        # Core / unscalable
         return {
             "phase":       phase["name"],
             "sets":        phase["sets"],
@@ -680,7 +858,7 @@ def _dup_recommendation(
             "per_hand":    False,
             "anchor_name": None,
             "anchor_1rm":  None,
-            "note":        f"Quality reps · {rir_note}",
+            "note":        f"Quality reps · {effort_note}",
             "source":      "bodyweight",
         }
 
@@ -691,7 +869,6 @@ def _dup_recommendation(
     anchor_1rm = _best_1rm(conn, anchor_name)
 
     if anchor_1rm is None and exercise_name != anchor_name:
-        # Try reverse-scaling from this exercise's own history
         own_1rm = _best_1rm(conn, exercise_name)
         if own_1rm is not None:
             anchor_1rm = own_1rm / scale
@@ -702,15 +879,16 @@ def _dup_recommendation(
             anchor_1rm = own_1rm
             anchor_name = exercise_name
         else:
-            return None  # no data anywhere
+            return None
 
     target_total   = anchor_1rm * scale * phase["pct"]
-    display_weight = _round_weight(target_total / 2 if per_hand else target_total)
+    display_weight = _round_weight(target_total / 2 if per_hand else target_total, per_hand)
     if display_weight <= 0:
         return None
 
+    unit_str = "kg/hand" if per_hand else "kg"
     if matched_from:
-        basis = f"matched to {matched_from} · {anchor_name} est. 1RM {round(anchor_1rm)} kg"
+        basis = f"matched to '{matched_from}' · {anchor_name} est. 1RM {round(anchor_1rm)} kg"
     elif anchor_name != exercise_name:
         basis = f"based on {anchor_name} est. 1RM {round(anchor_1rm)} kg"
     else:
@@ -725,7 +903,7 @@ def _dup_recommendation(
         "per_hand":    per_hand,
         "anchor_name": anchor_name,
         "anchor_1rm":  round(anchor_1rm, 1),
-        "note":        f"First session target · {basis} · {rir_note}",
+        "note":        f"First session: {display_weight:g} {unit_str} · {basis} · {effort_note}",
         "source":      "anchor_scaling",
     }
 
