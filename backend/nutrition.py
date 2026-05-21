@@ -223,6 +223,61 @@ def delete_food_log(entry_id: int, user_id: str = Depends(get_current_user)):
     return {"status": "deleted"}
 
 
+@router.get("/barcode/{code}")
+def lookup_barcode(code: str, _uid: str = Depends(get_current_user)):
+    """Look up a food product by barcode (EAN-13, UPC-A, etc.) via Open Food Facts."""
+    url = f"https://world.openfoodfacts.org/api/v0/product/{code}.json"
+    try:
+        resp = httpx.get(url, timeout=6.0)
+        data = resp.json()
+    except Exception as exc:
+        logger.warning("Barcode lookup failed for %s: %s", code, exc)
+        raise HTTPException(404, "Product not found")
+
+    if data.get("status") != 1:
+        raise HTTPException(404, "Product not found")
+
+    product    = data.get("product") or {}
+    nutriments = product.get("nutriments") or {}
+
+    # Calories per 100g — prefer kcal, fall back from kJ
+    kcal = nutriments.get("energy-kcal_100g")
+    if kcal is None:
+        kj = nutriments.get("energy_100g")
+        kcal = kj / 4.184 if kj else None
+    if kcal is None:
+        raise HTTPException(422, "Product found but has no calorie data")
+
+    name  = (product.get("product_name") or "").strip()
+    brand = (product.get("brands")       or "").strip() or None
+    if not name:
+        name = f"Product {code}"
+
+    # Parse serving size in grams
+    serving_raw = product.get("serving_size") or ""
+    serving_g: float = 100.0
+    try:
+        import re as _re
+        m = _re.search(r"(\d+(?:\.\d+)?)\s*g", serving_raw)
+        if m:
+            serving_g = float(m.group(1))
+    except Exception:
+        pass
+
+    return {
+        "name":           name,
+        "brand":          brand,
+        "serving_size_g": serving_g,
+        "calories_100g":  round(float(kcal), 1),
+        "protein_100g":   round(float(nutriments.get("proteins_100g")      or 0), 1),
+        "carbs_100g":     round(float(nutriments.get("carbohydrates_100g") or 0), 1),
+        "fat_100g":       round(float(nutriments.get("fat_100g")           or 0), 1),
+        "fiber_100g":     round(float(nutriments.get("fiber_100g")
+                                     or nutriments.get("fibers_100g") or 0), 1),
+        "image_url":      product.get("image_small_url") or None,
+    }
+
+
 @router.get("/search")
 def search_food(q: str = Query(..., min_length=2), _uid: str = Depends(get_current_user)):
     """Proxy search to Open Food Facts. Returns up to 20 results with per-100g macros."""

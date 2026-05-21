@@ -133,7 +133,8 @@ export const api = {
       log_date?: string
     }) => post<{ id: number; status: string; calories: number }>('/nutrition/diary', body),
     deleteFood: (id: number) => del<{ status: string }>('/nutrition/diary/' + id),
-    searchFood: (q: string) => get<FoodSearchResult[]>(`/nutrition/search?q=${encodeURIComponent(q)}`),
+    searchFood:    (q: string) => get<FoodSearchResult[]>(`/nutrition/search?q=${encodeURIComponent(q)}`),
+    lookupBarcode: (code: string) => get<FoodSearchResult>(`/nutrition/barcode/${encodeURIComponent(code)}`),
     suggest:    (date?: string) => get<SuggestResponse>(`/nutrition/suggest${date ? `?date=${encodeURIComponent(date)}` : ''}`),
   },
 

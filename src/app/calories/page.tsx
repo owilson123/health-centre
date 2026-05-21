@@ -1,13 +1,20 @@
 'use client'
 
 import { useState, useEffect, useRef, useCallback } from 'react'
+import dynamic from 'next/dynamic'
 import { motion, AnimatePresence } from 'framer-motion'
 import {
   Utensils, X, Plus, Settings, Search, Sparkles,
-  Trash2, Loader2, ChevronRight, Check,
+  Trash2, Loader2, ChevronRight, Check, ScanBarcode,
 } from 'lucide-react'
 import { GlassCard } from '@/components/ui/GlassCard'
 import { useRouter } from 'next/navigation'
+
+// Dynamic import — camera APIs are browser-only
+const BarcodeScanner = dynamic(
+  () => import('@/components/ui/BarcodeScanner').then(m => m.BarcodeScanner),
+  { ssr: false }
+)
 import {
   api,
   NutritionGoals,
@@ -232,6 +239,9 @@ function AddFoodSheet({
   const [selected, setSelected] = useState<FoodSearchResult | null>(null)
   const [qty, setQty] = useState('100')
   const [adding, setAdding] = useState(false)
+  const [showScanner, setShowScanner] = useState(false)
+  const [barcodeError, setBarcodeError] = useState<string | null>(null)
+  const [barcodeLoading, setBarcodeLoading] = useState(false)
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const inputRef = useRef<HTMLInputElement>(null)
 
@@ -253,6 +263,21 @@ function AddFoodSheet({
     }, 450)
     return () => { if (debounceRef.current) clearTimeout(debounceRef.current) }
   }, [query])
+
+  const handleBarcodeScan = async (code: string) => {
+    setShowScanner(false)
+    setBarcodeLoading(true)
+    setBarcodeError(null)
+    try {
+      const product = await api.nutrition.lookupBarcode(code)
+      setSelected(product)
+      setQty(String(product.serving_size_g || 100))
+    } catch {
+      setBarcodeError(`No product found for barcode ${code}. Try searching by name instead.`)
+    } finally {
+      setBarcodeLoading(false)
+    }
+  }
 
   const handleAdd = async () => {
     if (!selected) return
@@ -294,28 +319,55 @@ function AddFoodSheet({
             </button>
           </div>
 
-          {/* Search input */}
-          <div className="flex items-center gap-3 px-4 py-3 rounded-2xl bg-white/5 border border-white/10">
-            {searching ? (
-              <Loader2 size={15} className="text-white/30 animate-spin shrink-0" />
-            ) : (
-              <Search size={15} className="text-white/30 shrink-0" />
-            )}
-            <input
-              ref={inputRef}
-              type="text"
-              value={query}
-              onChange={e => { setQuery(e.target.value); setSelected(null) }}
-              placeholder="Search food or brand…"
-              className="flex-1 bg-transparent text-sm text-white placeholder-white/25 outline-none"
-            />
-            {query && (
-              <button onClick={() => { setQuery(''); setResults([]); setSelected(null) }}>
-                <X size={13} className="text-white/30" />
-              </button>
-            )}
+          {/* Search + scan row */}
+          <div className="flex gap-2">
+            <div className="flex-1 flex items-center gap-3 px-4 py-3 rounded-2xl bg-white/5 border border-white/10">
+              {searching || barcodeLoading ? (
+                <Loader2 size={15} className="text-white/30 animate-spin shrink-0" />
+              ) : (
+                <Search size={15} className="text-white/30 shrink-0" />
+              )}
+              <input
+                ref={inputRef}
+                type="text"
+                value={query}
+                onChange={e => { setQuery(e.target.value); setSelected(null); setBarcodeError(null) }}
+                placeholder="Search food or brand…"
+                className="flex-1 bg-transparent text-sm text-white placeholder-white/25 outline-none"
+              />
+              {query && (
+                <button onClick={() => { setQuery(''); setResults([]); setSelected(null) }}>
+                  <X size={13} className="text-white/30" />
+                </button>
+              )}
+            </div>
+            {/* Barcode scan button */}
+            <button
+              onClick={() => { setBarcodeError(null); setShowScanner(true) }}
+              className="w-12 h-12 rounded-2xl bg-indigo-500/15 border border-indigo-500/25 flex items-center justify-center active:scale-90 transition-transform shrink-0"
+              title="Scan barcode"
+            >
+              <ScanBarcode size={18} className="text-indigo-400" />
+            </button>
           </div>
+
+          {/* Barcode error */}
+          {barcodeError && (
+            <div className="px-4 py-3 rounded-2xl bg-red-500/10 border border-red-500/20">
+              <p className="text-xs text-red-400 leading-relaxed">{barcodeError}</p>
+            </div>
+          )}
         </div>
+
+        {/* Barcode scanner — full-screen overlay on top of this sheet */}
+        <AnimatePresence>
+          {showScanner && (
+            <BarcodeScanner
+              onDetect={handleBarcodeScan}
+              onClose={() => setShowScanner(false)}
+            />
+          )}
+        </AnimatePresence>
 
         {/* Results / selected */}
         <div className="flex-1 overflow-y-auto px-5 pb-6">
