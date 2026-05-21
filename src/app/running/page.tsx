@@ -1432,15 +1432,6 @@ export default function RunningPage() {
             <h1 className="text-2xl font-bold tracking-tight">Running</h1>
           </div>
           <div className="flex items-center gap-2">
-            {!activeProgram && (
-              <button
-                onClick={() => setShowNewProgram(true)}
-                className="flex items-center gap-1.5 px-3 py-2.5 bg-white/[0.06] border border-white/10 rounded-2xl text-xs font-bold text-white/60 active:bg-white/10"
-              >
-                <Flag size={12} />
-                Program
-              </button>
-            )}
             <button
               onClick={() => openNewRun()}
               className="flex items-center gap-2 px-4 py-2.5 bg-orange-500 rounded-2xl text-sm font-bold text-black active:scale-95 transition-transform"
@@ -1451,6 +1442,27 @@ export default function RunningPage() {
           </div>
         </div>
       </div>
+
+      {/* Training program banner — always shown, above the loading skeleton */}
+      {!loading && !activeProgram && (
+        <div className="px-4 mb-4">
+          <button
+            onClick={() => setShowNewProgram(true)}
+            className="w-full flex items-center gap-4 px-4 py-4 rounded-2xl border active:scale-[0.98] transition-transform"
+            style={{ background: 'linear-gradient(135deg, rgba(234,179,8,0.12) 0%, rgba(249,115,22,0.10) 100%)', borderColor: 'rgba(234,179,8,0.25)' }}
+          >
+            <div className="w-11 h-11 rounded-2xl flex items-center justify-center flex-shrink-0"
+                 style={{ background: 'rgba(234,179,8,0.18)' }}>
+              <Trophy size={20} className="text-yellow-400" />
+            </div>
+            <div className="flex-1 text-left">
+              <p className="text-sm font-bold text-white">Start a Training Program</p>
+              <p className="text-xs text-white/45 mt-0.5">Race-specific plan · VDOT paced · Built by your coach</p>
+            </div>
+            <ChevronRight size={18} className="text-white/30 flex-shrink-0" />
+          </button>
+        </div>
+      )}
 
       {loading ? (
         <div className="flex flex-col gap-3 px-4">
@@ -1541,26 +1553,6 @@ export default function RunningPage() {
             )}
           </div>
 
-          {/* Start a program CTA (only when no active program and has some data) */}
-          {!activeProgram && profile && (
-            <div className="mx-4 mt-5">
-              <button
-                onClick={() => setShowNewProgram(true)}
-                className="w-full flex items-center justify-between px-4 py-4 bg-white/[0.03] border border-white/[0.07] rounded-2xl active:bg-white/[0.06] transition-colors"
-              >
-                <div className="flex items-center gap-3">
-                  <div className="w-9 h-9 rounded-xl bg-yellow-500/15 flex items-center justify-center">
-                    <Trophy size={15} className="text-yellow-400" />
-                  </div>
-                  <div className="text-left">
-                    <p className="text-sm font-semibold text-white/80">Start a Training Program</p>
-                    <p className="text-xs text-white/35">Race-specific plan built by your coach</p>
-                  </div>
-                </div>
-                <ChevronRight size={16} className="text-white/25" />
-              </button>
-            </div>
-          )}
         </>
       )}
 
