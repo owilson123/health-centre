@@ -2,7 +2,7 @@
 
 import { useCallback, useRef, useState } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { RefreshCw, Clock, Zap, TrendingUp, TrendingDown, Minus, Settings, X, ChevronRight, Flame, Brain, Heart, Battery, Wind, Dumbbell, Bike, PersonStanding, Timer, Target } from 'lucide-react'
+import { RefreshCw, Clock, Zap, TrendingUp, TrendingDown, Minus, Settings, X, ChevronRight, Flame, Brain, Heart, Battery, Wind, Dumbbell, Bike, PersonStanding, Timer, Target, Moon, Activity } from 'lucide-react'
 import { useRouter } from 'next/navigation'
 import { ScoreRing } from '@/components/ui/ScoreRing'
 import { GlassCard } from '@/components/ui/GlassCard'
@@ -10,7 +10,8 @@ import { SkeletonRing, SkeletonCard } from '@/components/ui/SkeletonCard'
 import { EmptyState } from '@/components/ui/EmptyState'
 import { useDashboard } from '@/lib/hooks'
 import { getGreeting, scoreColor, scoreLabel } from '@/lib/utils'
-import type { RecoveryScore, StrainScore, WorkoutPrescription } from '@/lib/types'
+import type { RecoveryScore, StrainScore, WorkoutPrescription, SleepScore } from '@/lib/types'
+import { SleepStageBar } from '@/components/charts/SleepStageBar'
 import { formatDuration } from '@/lib/utils'
 
 function CalorieArc({ current, predicted }: { current: number; predicted: number }) {
@@ -42,6 +43,119 @@ function ACWRBadge({ acwr, label }: { acwr: number; label: string }) {
       <span className="text-xs font-semibold" style={{ color }}>{label}</span>
       <span className="text-xs text-white/30">ACWR {acwr.toFixed(2)}</span>
     </div>
+  )
+}
+
+function SleepModal({ sleep, onClose }: { sleep: SleepScore; onClose: () => void }) {
+  const components = [
+    { label: 'Duration',     value: sleep.components.duration,       color: '#6366f1' },
+    { label: 'Efficiency',   value: sleep.components.efficiency,     color: '#8b5cf6' },
+    { label: 'Deep Sleep',   value: sleep.components.deep_sleep,     color: '#4f46e5' },
+    { label: 'REM Sleep',    value: sleep.components.rem_sleep,      color: '#7c3aed' },
+    { label: 'Awake Time',   value: sleep.components.awake_penalty,  color: scoreColor(sleep.components.awake_penalty) },
+    { label: 'HRV',          value: sleep.components.hrv,            color: '#3b82f6' },
+    { label: 'Resting HR',   value: sleep.components.resting_hr,     color: '#ec4899' },
+  ]
+
+  const stats = [
+    { icon: Clock,    label: 'Duration',     value: formatDuration(sleep.data.total_sleep_seconds),          color: 'text-indigo-400' },
+    { icon: Activity, label: 'Efficiency',   value: `${Math.round(sleep.data.efficiency)}%`,                  color: 'text-violet-400' },
+    { icon: Brain,    label: 'HRV',          value: sleep.data.hrv_overnight ? `${Math.round(sleep.data.hrv_overnight)} ms` : '—', color: 'text-blue-400' },
+    { icon: Heart,    label: 'Resting HR',   value: sleep.data.resting_hr ? `${Math.round(sleep.data.resting_hr)} bpm` : '—', color: 'text-pink-400' },
+  ]
+
+  return (
+    <AnimatePresence>
+      <motion.div className="fixed inset-0 z-50 flex items-end justify-center"
+        initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
+        <motion.div className="absolute inset-0 bg-black/60 backdrop-blur-sm"
+          onClick={onClose} initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} />
+
+        <motion.div
+          className="relative w-full max-w-lg max-h-[92vh] overflow-y-auto rounded-t-3xl bg-[#111] border-t border-white/10"
+          initial={{ y: '100%' }} animate={{ y: 0 }} exit={{ y: '100%' }}
+          transition={{ type: 'spring', damping: 30, stiffness: 300 }}>
+
+          <div className="flex justify-center pt-3 pb-1">
+            <div className="w-10 h-1 rounded-full bg-white/20" />
+          </div>
+
+          <div className="px-5 pb-12 pt-2 space-y-5">
+            {/* Header */}
+            <div className="flex items-start justify-between">
+              <div>
+                <p className="text-xs text-white/40 uppercase tracking-wider mb-1">Last night</p>
+                <h2 className="text-xl font-bold">Sleep Analysis</h2>
+              </div>
+              <button onClick={onClose}
+                className="w-8 h-8 rounded-full bg-white/10 flex items-center justify-center active:bg-white/20 mt-1">
+                <X size={14} className="text-white/60" />
+              </button>
+            </div>
+
+            {/* Score hero */}
+            <div className="rounded-2xl bg-gradient-to-br from-indigo-500/20 to-violet-900/10 border border-indigo-500/20 p-4 flex items-center gap-4">
+              <div className="w-16 h-16 rounded-2xl flex items-center justify-center shrink-0"
+                style={{ backgroundColor: 'rgba(99,102,241,0.15)' }}>
+                <Moon size={28} className="text-indigo-400" />
+              </div>
+              <div className="flex-1">
+                <p className="text-xs text-white/40 uppercase tracking-wider mb-0.5">Sleep score</p>
+                <p className="text-4xl font-bold" style={{ color: scoreColor(sleep.score) }}>{sleep.score}</p>
+                <p className="text-sm text-white/50 mt-0.5">{formatDuration(sleep.data.total_sleep_seconds)} total</p>
+              </div>
+            </div>
+
+            {/* Stats grid */}
+            <div className="grid grid-cols-2 gap-3">
+              {stats.map(({ icon: Icon, label, value, color }) => (
+                <div key={label} className="rounded-2xl bg-white/5 border border-white/8 p-3">
+                  <div className="flex items-center gap-1.5 mb-1">
+                    <Icon size={12} className={color} />
+                    <span className="text-xs text-white/40">{label}</span>
+                  </div>
+                  <span className="text-xl font-bold">{value}</span>
+                </div>
+              ))}
+            </div>
+
+            {/* Sleep stages */}
+            <div className="rounded-2xl bg-white/5 border border-white/8 p-4">
+              <p className="text-xs text-white/40 uppercase tracking-wider mb-3">Sleep Stages</p>
+              <SleepStageBar data={sleep.data} />
+            </div>
+
+            {/* Component breakdown */}
+            <div className="rounded-2xl bg-white/5 border border-white/8 p-4">
+              <p className="text-xs text-white/40 uppercase tracking-wider mb-4">Score Breakdown</p>
+              <div className="space-y-3">
+                {components.map(({ label, value, color }) => (
+                  <div key={label} className="flex items-center gap-3">
+                    <span className="text-xs text-white/50 w-24 shrink-0">{label}</span>
+                    <div className="flex-1 h-2 bg-white/10 rounded-full overflow-hidden">
+                      <motion.div
+                        className="h-full rounded-full"
+                        style={{ backgroundColor: color }}
+                        initial={{ width: 0 }}
+                        animate={{ width: `${value}%` }}
+                        transition={{ duration: 0.7, ease: 'easeOut' }}
+                      />
+                    </div>
+                    <span className="text-xs font-semibold text-white/70 w-8 text-right">{Math.round(value)}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            {/* Insight */}
+            <div className="rounded-2xl bg-indigo-500/10 border border-indigo-500/20 p-4">
+              <p className="text-xs text-indigo-400 uppercase tracking-wider mb-2">Insight</p>
+              <p className="text-sm text-white/80 leading-relaxed">{sleep.insight}</p>
+            </div>
+          </div>
+        </motion.div>
+      </motion.div>
+    </AnimatePresence>
   )
 }
 
@@ -563,6 +677,7 @@ export default function OverviewPage() {
   const touchStartY = useRef(0)
   const [showTrainingLoad, setShowTrainingLoad] = useState(false)
   const [showStrain, setShowStrain] = useState(false)
+  const [showSleep, setShowSleep] = useState(false)
 
   const onTouchStart = useCallback((e: React.TouchEvent) => {
     touchStartY.current = e.touches[0].clientY
@@ -630,13 +745,16 @@ export default function OverviewPage() {
           <motion.div variants={item}>
             <GlassCard className="py-6">
               <div className="flex justify-around items-center">
-                <div className="flex flex-col items-center gap-2">
+                <button
+                  className="flex flex-col items-center gap-2 active:scale-95 transition-transform"
+                  onClick={() => setShowSleep(true)}
+                >
                   <ScoreRing score={data.sleep.score} size={100} strokeWidth={8} />
                   <div className="text-center">
                     <div className="text-xs font-semibold text-white/50 uppercase tracking-widest">Sleep</div>
                     <div className="text-xs mt-0.5" style={{ color: scoreColor(data.sleep.score) }}>{scoreLabel(data.sleep.score)}</div>
                   </div>
-                </div>
+                </button>
                 <div className="flex flex-col items-center gap-2">
                   <ScoreRing score={data.recovery.score} size={120} strokeWidth={10} />
                   <div className="text-center">
@@ -727,6 +845,9 @@ export default function OverviewPage() {
         </motion.div>
       )}
 
+      {showSleep && data && (
+        <SleepModal sleep={data.sleep} onClose={() => setShowSleep(false)} />
+      )}
       {showTrainingLoad && data && (
         <TrainingLoadModal recovery={data.recovery} onClose={() => setShowTrainingLoad(false)} />
       )}

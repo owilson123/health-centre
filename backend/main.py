@@ -15,6 +15,7 @@ from garmin_sync import sync_all, test_credentials, get_stored_credentials, rese
 from metrics import calc_sleep_score, calc_recovery_score, calc_strain_score, calc_calories
 from training import router as training_router, init_training_db
 from running import router as running_router, init_running_db
+from nutrition import router as nutrition_router, init_nutrition_db
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -22,6 +23,7 @@ logger = logging.getLogger(__name__)
 app = FastAPI(title="Health Centre API", version="1.0.0")
 app.include_router(training_router)
 app.include_router(running_router)
+app.include_router(nutrition_router)
 
 ALLOWED_ORIGINS = os.environ.get("ALLOWED_ORIGINS", "*").split(",")
 app.add_middleware(
@@ -40,6 +42,7 @@ def startup():
         init_db(uid)
         init_training_db(uid)
         init_running_db(uid)
+        init_nutrition_db(uid)
         logger.info(f"Database initialised for user {uid}")
 
 

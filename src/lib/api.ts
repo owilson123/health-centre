@@ -120,6 +120,23 @@ export const api = {
     smartSuggest: () => get<SmartSuggest>('/training/smart-suggest'),
   },
 
+  // Nutrition
+  nutrition: {
+    getGoals:   () => get<NutritionGoals>('/nutrition/goals'),
+    updateGoals:(body: Partial<NutritionGoals>) => put<{ status: string }>('/nutrition/goals', body),
+    getDiary:   (date?: string) => get<DiaryDay>(`/nutrition/diary${date ? `?date=${encodeURIComponent(date)}` : ''}`),
+    addFood:    (body: {
+      meal: string; food_name: string; brand?: string | null;
+      quantity_g: number; calories_per_100g: number;
+      protein_per_100g?: number; carbs_per_100g?: number;
+      fat_per_100g?: number; fiber_per_100g?: number;
+      log_date?: string
+    }) => post<{ id: number; status: string; calories: number }>('/nutrition/diary', body),
+    deleteFood: (id: number) => del<{ status: string }>('/nutrition/diary/' + id),
+    searchFood: (q: string) => get<FoodSearchResult[]>(`/nutrition/search?q=${encodeURIComponent(q)}`),
+    suggest:    (date?: string) => get<SuggestResponse>(`/nutrition/suggest${date ? `?date=${encodeURIComponent(date)}` : ''}`),
+  },
+
   // Running
   running: {
     getProfile:  () => get<RunningProfile>('/running/profile'),
@@ -348,4 +365,84 @@ export interface ActiveProgram extends TrainingProgram {
   weeks_to_race:  number
   upcoming_days:  PlanDay[]
   last_completed: string | null
+}
+
+// ─── Nutrition types ──────────────────────────────────────────────────────────
+
+export interface NutritionGoals {
+  id:             number
+  calories:       number
+  protein_g:      number
+  carbs_g:        number
+  fat_g:          number
+  goal_type:      string
+  activity_level: string
+  updated_at:     string | null
+}
+
+export interface FoodLogEntry {
+  id:         number
+  log_date:   string
+  meal:       string
+  food_name:  string
+  brand:      string | null
+  quantity_g: number
+  calories:   number
+  protein_g:  number
+  carbs_g:    number
+  fat_g:      number
+  fiber_g:    number | null
+  logged_at:  string
+}
+
+export interface DiaryTotals {
+  calories:  number
+  protein_g: number
+  carbs_g:   number
+  fat_g:     number
+  fiber_g:   number
+}
+
+export interface CalorieBalance {
+  goal:      number
+  consumed:  number
+  burned:    number
+  remaining: number
+}
+
+export interface DiaryDay {
+  date:             string
+  meals:            Record<string, FoodLogEntry[]>
+  totals:           DiaryTotals
+  calorie_balance:  CalorieBalance
+}
+
+export interface FoodSearchResult {
+  name:           string
+  brand:          string | null
+  serving_size_g: number
+  calories_100g:  number
+  protein_100g:   number
+  carbs_100g:     number
+  fat_100g:       number
+  fiber_100g:     number
+  image_url:      string | null
+}
+
+export interface FoodSuggestion {
+  name:       string
+  serving_g:  number
+  calories:   number
+  protein_g:  number
+  carbs_g:    number
+  fat_g:      number
+  fiber_g:    number
+  per_100g:   { calories: number; protein_g: number; carbs_g: number; fat_g: number; fiber_g: number }
+  reason:     string
+}
+
+export interface SuggestResponse {
+  date:        string
+  remaining:   { calories: number; protein_g: number; carbs_g: number; fat_g: number }
+  suggestions: FoodSuggestion[]
 }
