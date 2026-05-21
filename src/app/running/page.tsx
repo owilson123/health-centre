@@ -5,9 +5,11 @@ import { motion, AnimatePresence } from 'framer-motion'
 import {
   Play, X, Trash2, Clock,
   TrendingUp, Activity, Zap, Heart, MapPin, RotateCcw,
+  Trophy, ChevronRight, Calendar, CheckCircle, Plus, Flag,
 } from 'lucide-react'
 import {
   api, RunType, RunningProfile, RunSuggestion, RunPlan, RunLog,
+  ActiveProgram, PlanDay,
 } from '@/lib/api'
 
 // ─── Utilities ────────────────────────────────────────────────────────────────
@@ -701,29 +703,678 @@ function PaceZoneGuide({ profile }: { profile: RunningProfile }) {
   )
 }
 
+// ─── VDOT info tooltip ────────────────────────────────────────────────────────
+
+function VdotInfo({ vdot, est5kS }: { vdot: number; est5kS: number }) {
+  const [open, setOpen] = useState(false)
+  const m = Math.floor(est5kS / 60)
+  const s = est5kS % 60
+  const pacePerKm = Math.round(est5kS / 5)
+  const pm = Math.floor(pacePerKm / 60)
+  const ps = pacePerKm % 60
+
+  return (
+    <>
+      <button
+        onClick={() => setOpen(true)}
+        className="text-[10px] text-indigo-400/70 underline underline-offset-2 decoration-dotted"
+      >
+        How is this calculated?
+      </button>
+
+      <AnimatePresence>
+        {open && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-[90] bg-black/80 flex items-end"
+            onClick={() => setOpen(false)}
+          >
+            <motion.div
+              initial={{ y: '100%' }}
+              animate={{ y: 0 }}
+              exit={{ y: '100%' }}
+              transition={{ type: 'spring', damping: 28, stiffness: 300 }}
+              onClick={e => e.stopPropagation()}
+              className="w-full bg-[#131313] rounded-t-3xl border-t border-white/10 px-5 pt-5 pb-8"
+            >
+              <div className="w-10 h-1 bg-white/15 rounded-full mx-auto mb-5" />
+              <div className="flex items-center gap-3 mb-4">
+                <div className="w-9 h-9 rounded-xl bg-indigo-500/20 flex items-center justify-center">
+                  <TrendingUp size={16} className="text-indigo-400" />
+                </div>
+                <div>
+                  <h3 className="text-base font-bold">Your 5K Prediction</h3>
+                  <p className="text-xs text-white/40">Based on Jack Daniels VDOT methodology</p>
+                </div>
+              </div>
+
+              <div className="space-y-3 text-sm text-white/60 leading-relaxed">
+                <p>
+                  <span className="text-white font-semibold">VDOT {vdot.toFixed(1)}</span> is your aerobic capacity
+                  score, derived from your best-effort run in the last 30 days. It&apos;s a proxy for VO₂max
+                  that accounts for running economy — not just raw oxygen uptake.
+                </p>
+                <p>
+                  A 5K is typically run at <span className="text-white">~97% of your VO₂max</span>.
+                  Working backwards from your VDOT, this gives an estimated 5K pace of{' '}
+                  <span className="text-orange-400 font-semibold">{pm}:{ps.toString().padStart(2,'0')} /km</span>,
+                  predicting a finish time of{' '}
+                  <span className="text-orange-400 font-semibold">{m}:{s.toString().padStart(2,'0')}</span>.
+                </p>
+                <p>
+                  All your training paces (easy, tempo, intervals) are calculated from the same VDOT
+                  using Jack Daniels&apos; scientifically validated percentages. This ensures every session
+                  is calibrated to your current fitness.
+                </p>
+                <p className="text-white/35 text-xs">
+                  Pacing is based on your last 30 days of running. The more quality efforts you log,
+                  the more accurate your predictions become.
+                </p>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </>
+  )
+}
+
+// ─── Active program card ──────────────────────────────────────────────────────
+
+const PHASE_COLORS: Record<string, string> = {
+  Base:  'text-emerald-400',
+  Build: 'text-orange-400',
+  Peak:  'text-red-400',
+  Taper: 'text-blue-400',
+  Race:  'text-yellow-400',
+}
+const PHASE_BG: Record<string, string> = {
+  Base:  'bg-emerald-500/10 border-emerald-500/20',
+  Build: 'bg-orange-500/10 border-orange-500/20',
+  Peak:  'bg-red-500/10 border-red-500/20',
+  Taper: 'bg-blue-500/10 border-blue-500/20',
+  Race:  'bg-yellow-500/10 border-yellow-500/20',
+}
+const RUN_TYPE_EMOJI: Record<string, string> = {
+  easy:     '🏃',
+  long:     '🛣️',
+  tempo:    '🔥',
+  interval: '⚡',
+  recovery: '🌿',
+  race:     '🏆',
+}
+
+function ActiveProgramCard({
+  program,
+  onDelete,
+  onCompleteDay,
+  onNewRun,
+}: {
+  program: ActiveProgram
+  onDelete: () => void
+  onCompleteDay: (dayId: number) => void
+  onNewRun: (type: RunType) => void
+}) {
+  const [showPlan, setShowPlan]       = useState(false)
+  const [confirmDel, setConfirmDel]   = useState(false)
+  const progressPct = program.total_days > 0
+    ? Math.round((program.completed_days / program.total_days) * 100)
+    : 0
+
+  const todayStr = new Date().toISOString().split('T')[0]
+  const todayDay = program.upcoming_days.find(d => d.plan_date === todayStr)
+  const nextDays  = program.upcoming_days.filter(d => d.plan_date > todayStr).slice(0, 4)
+
+  const raceKm = program.race_distance_km
+  const raceLabel =
+    raceKm <= 6   ? '5K'    :
+    raceKm <= 12  ? '10K'   :
+    raceKm <= 23  ? 'Half Marathon' :
+    raceKm <= 44  ? 'Marathon' :
+    `${raceKm}km Race`
+
+  return (
+    <div className="mx-4 mb-5">
+      <div className="rounded-3xl border border-white/10 overflow-hidden"
+           style={{ background: 'linear-gradient(135deg, rgba(255,255,255,0.04) 0%, rgba(255,255,255,0.02) 100%)' }}>
+
+        {/* Header */}
+        <div className="px-4 pt-4 pb-3 border-b border-white/[0.06]">
+          <div className="flex items-start justify-between gap-3">
+            <div className="flex items-center gap-2.5">
+              <div className="w-9 h-9 rounded-xl bg-yellow-500/15 flex items-center justify-center flex-shrink-0">
+                <Trophy size={16} className="text-yellow-400" />
+              </div>
+              <div>
+                <p className="text-[10px] font-bold uppercase tracking-widest text-yellow-400/80 mb-0.5">
+                  Active Program
+                </p>
+                <h3 className="text-sm font-bold text-white leading-tight">{program.name}</h3>
+              </div>
+            </div>
+            <div className="text-right flex-shrink-0">
+              <p className="text-xs font-bold text-white">{program.days_to_race}d</p>
+              <p className="text-[10px] text-white/35">to race</p>
+            </div>
+          </div>
+
+          {/* Progress bar */}
+          <div className="mt-3">
+            <div className="flex items-center justify-between mb-1">
+              <span className="text-[10px] text-white/35">{program.completed_days} / {program.total_days} sessions done</span>
+              <span className="text-[10px] font-bold text-white/50">{progressPct}%</span>
+            </div>
+            <div className="h-1.5 bg-white/8 rounded-full overflow-hidden">
+              <div
+                className="h-full bg-gradient-to-r from-orange-500 to-yellow-400 rounded-full transition-all"
+                style={{ width: `${progressPct}%` }}
+              />
+            </div>
+          </div>
+        </div>
+
+        {/* Today's session */}
+        {todayDay && (
+          <div className={`px-4 py-3 border-b border-white/[0.06] ${PHASE_BG[todayDay.phase] || 'bg-white/[0.03] border-white/10'}`}>
+            <p className="text-[10px] font-bold uppercase tracking-widest text-white/40 mb-2">Today</p>
+            <div className="flex items-center gap-3">
+              <span className="text-xl">{RUN_TYPE_EMOJI[todayDay.run_type] || '🏃'}</span>
+              <div className="flex-1">
+                <div className="flex items-center gap-2">
+                  <span className={`text-sm font-bold ${PHASE_COLORS[todayDay.phase] || 'text-white'}`}>
+                    {TYPE_CONFIG[todayDay.run_type as RunType]?.label ?? todayDay.run_type}
+                  </span>
+                  <span className="text-xs text-white/40">{todayDay.distance_km} km</span>
+                  {todayDay.pace_target_s_km && (
+                    <span className="text-xs text-white/30">@ {fmtPace(todayDay.pace_target_s_km)} /km</span>
+                  )}
+                </div>
+                {todayDay.notes && (
+                  <p className="text-xs text-white/40 mt-0.5 leading-snug">{todayDay.notes}</p>
+                )}
+              </div>
+              <button
+                onClick={() => onNewRun(todayDay.run_type as RunType)}
+                className="flex items-center gap-1 px-3 py-1.5 bg-orange-500/20 border border-orange-500/30 rounded-xl text-xs font-bold text-orange-300 active:bg-orange-500/35 flex-shrink-0"
+              >
+                <Play size={11} />
+                Go
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* Upcoming days */}
+        {nextDays.length > 0 && (
+          <div className="px-4 py-3 border-b border-white/[0.06]">
+            <p className="text-[10px] font-bold uppercase tracking-widest text-white/25 mb-2">Upcoming</p>
+            <div className="space-y-1.5">
+              {nextDays.map(d => {
+                const [y, mo, dy] = d.plan_date.split('-').map(Number)
+                const dateLabel = new Date(y, mo - 1, dy).toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short' })
+                return (
+                  <div key={d.id} className="flex items-center gap-2.5">
+                    <span className="text-sm w-5 text-center">{RUN_TYPE_EMOJI[d.run_type] || '🏃'}</span>
+                    <span className="text-xs text-white/50 w-20 flex-shrink-0">{dateLabel}</span>
+                    <span className={`text-xs font-semibold ${PHASE_COLORS[d.phase] || 'text-white/60'}`}>
+                      {TYPE_CONFIG[d.run_type as RunType]?.label ?? d.run_type}
+                    </span>
+                    <span className="text-xs text-white/30 ml-auto">{d.distance_km} km</span>
+                  </div>
+                )
+              })}
+            </div>
+          </div>
+        )}
+
+        {/* Footer */}
+        <div className="px-4 py-3 flex items-center gap-2">
+          <button
+            onClick={() => setShowPlan(true)}
+            className="flex-1 flex items-center justify-center gap-1.5 py-2.5 bg-white/[0.05] border border-white/10 rounded-xl text-xs font-semibold text-white/60 active:bg-white/10"
+          >
+            <Calendar size={12} />
+            Full Plan
+          </button>
+          <button
+            onClick={() => {
+              if (confirmDel) { onDelete(); return }
+              setConfirmDel(true)
+              setTimeout(() => setConfirmDel(false), 3000)
+            }}
+            className={`p-2.5 rounded-xl border text-xs font-semibold transition-colors ${
+              confirmDel
+                ? 'bg-red-500/20 border-red-500/30 text-red-400'
+                : 'bg-white/[0.04] border-white/10 text-white/30'
+            }`}
+          >
+            <Trash2 size={13} />
+          </button>
+        </div>
+      </div>
+
+      {/* Full plan sheet */}
+      <AnimatePresence>
+        {showPlan && (
+          <PlanSheet program={program} onClose={() => setShowPlan(false)} onCompleteDay={onCompleteDay} />
+        )}
+      </AnimatePresence>
+    </div>
+  )
+}
+
+// ─── Full plan sheet ──────────────────────────────────────────────────────────
+
+function PlanSheet({
+  program,
+  onClose,
+  onCompleteDay,
+}: {
+  program: ActiveProgram
+  onClose: () => void
+  onCompleteDay: (dayId: number) => void
+}) {
+  const [days, setDays]     = useState<PlanDay[]>([])
+  const [loading, setLoading] = useState(true)
+  const todayStr = new Date().toISOString().split('T')[0]
+
+  // Group days by week
+  useEffect(() => {
+    // Load all plan days for this program via the calendar endpoint
+    const start = new Date().toISOString().split('T')[0]
+    const end   = program.race_date
+    api.running.programs.calendar(start, end)
+      .then(setDays)
+      .catch(() => {})
+      .finally(() => setLoading(false))
+  }, [program.race_date])
+
+  // Group by week
+  const byWeek = days.reduce<Record<number, PlanDay[]>>((acc, d) => {
+    ;(acc[d.week_number] ??= []).push(d)
+    return acc
+  }, {})
+
+  const weekNums = Object.keys(byWeek).map(Number).sort((a, b) => a - b)
+
+  return (
+    <motion.div
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      exit={{ opacity: 0 }}
+      className="fixed inset-0 z-[70] bg-black/80 flex items-end"
+      onClick={onClose}
+    >
+      <motion.div
+        initial={{ y: '100%' }}
+        animate={{ y: 0 }}
+        exit={{ y: '100%' }}
+        transition={{ type: 'spring', damping: 28, stiffness: 300 }}
+        onClick={e => e.stopPropagation()}
+        className="w-full bg-[#111111] rounded-t-3xl border-t border-white/10 max-h-[90vh] flex flex-col"
+        style={{ paddingBottom: 'calc(env(safe-area-inset-bottom) + 1rem)' }}
+      >
+        <div className="flex-shrink-0 px-5 pt-4 pb-3 border-b border-white/[0.06]">
+          <div className="w-10 h-1 bg-white/15 rounded-full mx-auto mb-4" />
+          <div className="flex items-center justify-between">
+            <div>
+              <h3 className="text-base font-bold">{program.name}</h3>
+              <p className="text-xs text-white/35">{program.weeks_to_race} weeks to race · {program.days_to_race} days</p>
+            </div>
+            <button onClick={onClose} className="p-2 text-white/40">
+              <X size={18} />
+            </button>
+          </div>
+        </div>
+
+        <div className="flex-1 overflow-y-auto px-5 pt-4">
+          {loading ? (
+            <div className="space-y-3">
+              {[1,2,3].map(i => <div key={i} className="h-24 bg-white/[0.04] rounded-2xl animate-pulse" />)}
+            </div>
+          ) : weekNums.length === 0 ? (
+            <p className="text-sm text-white/30 text-center py-12">No upcoming sessions in your plan.</p>
+          ) : (
+            <div className="space-y-5 pb-4">
+              {weekNums.map(wk => {
+                const wkDays = byWeek[wk].sort((a, b) => a.plan_date.localeCompare(b.plan_date))
+                const phase  = wkDays[0]?.phase ?? 'Base'
+                return (
+                  <div key={wk}>
+                    <div className="flex items-center gap-2 mb-2">
+                      <span className={`text-[10px] font-bold uppercase tracking-widest ${PHASE_COLORS[phase] || 'text-white/40'}`}>
+                        Week {wk} — {phase}
+                      </span>
+                    </div>
+                    <div className="space-y-1.5">
+                      {wkDays.map(d => {
+                        const isToday    = d.plan_date === todayStr
+                        const isPast     = d.plan_date < todayStr
+                        const isDone     = d.completed === 1
+                        const [y, mo, dy] = d.plan_date.split('-').map(Number)
+                        const dateLabel  = new Date(y, mo - 1, dy).toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short' })
+                        return (
+                          <div
+                            key={d.id}
+                            className={`flex items-center gap-3 p-3 rounded-2xl border transition-all ${
+                              isDone    ? 'bg-emerald-500/8 border-emerald-500/15 opacity-60' :
+                              isToday   ? 'bg-orange-500/10 border-orange-500/25' :
+                              isPast    ? 'opacity-40 bg-white/[0.02] border-white/5' :
+                              'bg-white/[0.04] border-white/[0.06]'
+                            }`}
+                          >
+                            <span className="text-lg w-6 text-center flex-shrink-0">
+                              {isDone ? '✅' : RUN_TYPE_EMOJI[d.run_type] || '🏃'}
+                            </span>
+                            <div className="flex-1 min-w-0">
+                              <div className="flex items-center gap-2">
+                                <span className={`text-xs font-semibold ${
+                                  isDone ? 'text-emerald-400' : PHASE_COLORS[d.phase] || 'text-white/70'
+                                }`}>
+                                  {TYPE_CONFIG[d.run_type as RunType]?.label ?? d.run_type}
+                                </span>
+                                <span className="text-[10px] text-white/30">{dateLabel}</span>
+                                {isToday && (
+                                  <span className="text-[9px] font-bold text-orange-400 bg-orange-500/15 px-1.5 py-0.5 rounded-full">TODAY</span>
+                                )}
+                              </div>
+                              <div className="flex items-center gap-2 mt-0.5">
+                                <span className="text-xs text-white/50">{d.distance_km} km</span>
+                                {d.pace_target_s_km && (
+                                  <span className="text-xs text-white/30">@ {fmtPace(d.pace_target_s_km)} /km</span>
+                                )}
+                              </div>
+                            </div>
+                            {!isDone && (isPast || isToday) && (
+                              <button
+                                onClick={() => onCompleteDay(d.id)}
+                                className="p-1.5 rounded-xl bg-emerald-500/15 border border-emerald-500/25 flex-shrink-0"
+                              >
+                                <CheckCircle size={14} className="text-emerald-400" />
+                              </button>
+                            )}
+                          </div>
+                        )
+                      })}
+                    </div>
+                  </div>
+                )
+              })}
+            </div>
+          )}
+        </div>
+      </motion.div>
+    </motion.div>
+  )
+}
+
+// ─── New Program Sheet ────────────────────────────────────────────────────────
+
+const RACE_DISTANCES = [
+  { label: '5K',           km: 5.0 },
+  { label: '10K',          km: 10.0 },
+  { label: 'Half Marathon', km: 21.1 },
+  { label: 'Marathon',      km: 42.2 },
+]
+
+function NewProgramSheet({
+  onClose,
+  onCreated,
+}: {
+  onClose:   () => void
+  onCreated: () => void
+}) {
+  const today = new Date()
+  const minDate = new Date(today)
+  minDate.setDate(minDate.getDate() + 28)   // at least 4 weeks away
+  const minDateStr = minDate.toISOString().split('T')[0]
+
+  const [name,         setName]         = useState('')
+  const [raceDate,     setRaceDate]     = useState('')
+  const [distIdx,      setDistIdx]      = useState(0)
+  const [customDist,   setCustomDist]   = useState('')
+  const [targetTime,   setTargetTime]   = useState('')
+  const [runsPerWeek,  setRunsPerWeek]  = useState(4)
+  const [saving,       setSaving]       = useState(false)
+  const [error,        setError]        = useState('')
+
+  const selDist = distIdx < RACE_DISTANCES.length
+    ? RACE_DISTANCES[distIdx].km
+    : parseFloat(customDist) || 0
+
+  // Auto-fill name
+  useEffect(() => {
+    const dist = distIdx < RACE_DISTANCES.length ? RACE_DISTANCES[distIdx].label : `${customDist}km`
+    const yr   = raceDate ? ` ${raceDate.split('-')[0]}` : ''
+    setName(`${dist} Training${yr}`)
+  }, [distIdx, customDist, raceDate])
+
+  const parseTargetTime = (): number | undefined => {
+    if (!targetTime.trim()) return undefined
+    const parts = targetTime.trim().split(':').map(Number)
+    if (parts.some(isNaN)) return undefined
+    if (parts.length === 2) return parts[0] * 60 + parts[1]
+    if (parts.length === 3) return parts[0] * 3600 + parts[1] * 60 + parts[2]
+    return undefined
+  }
+
+  const handleCreate = async () => {
+    if (!raceDate) { setError('Set your race date'); return }
+    if (!selDist || selDist <= 0) { setError('Select a race distance'); return }
+    setSaving(true)
+    setError('')
+    try {
+      await api.running.programs.create({
+        name:             name.trim() || 'Training Plan',
+        race_date:        raceDate,
+        race_distance_km: selDist,
+        target_time_s:    parseTargetTime(),
+        runs_per_week:    runsPerWeek,
+      })
+      onCreated()
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : 'Failed to create program')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <motion.div
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      exit={{ opacity: 0 }}
+      className="fixed inset-0 z-[70] bg-black/80 flex items-end"
+      onClick={onClose}
+    >
+      <motion.div
+        initial={{ y: '100%' }}
+        animate={{ y: 0 }}
+        exit={{ y: '100%' }}
+        transition={{ type: 'spring', damping: 28, stiffness: 300 }}
+        onClick={e => e.stopPropagation()}
+        className="w-full bg-[#111111] rounded-t-3xl border-t border-white/10 max-h-[92vh] flex flex-col"
+        style={{ paddingBottom: 'calc(env(safe-area-inset-bottom) + 1rem)' }}
+      >
+        <div className="flex-shrink-0 px-5 pt-4 pb-3">
+          <div className="w-10 h-1 bg-white/15 rounded-full mx-auto mb-4" />
+          <div className="flex items-center justify-between mb-1">
+            <div>
+              <h3 className="text-lg font-bold">New Training Program</h3>
+              <p className="text-xs text-white/35">Expert running coach plan — built for you</p>
+            </div>
+            <button onClick={onClose} className="p-2 text-white/40"><X size={18} /></button>
+          </div>
+        </div>
+
+        <div className="flex-1 overflow-y-auto px-5 pb-2 space-y-5">
+          {/* Race distance */}
+          <div>
+            <p className="text-xs font-semibold text-white/40 mb-2">Race Distance</p>
+            <div className="grid grid-cols-2 gap-2">
+              {RACE_DISTANCES.map((d, i) => (
+                <button
+                  key={d.label}
+                  onClick={() => setDistIdx(i)}
+                  className={`py-3 rounded-xl border text-sm font-semibold transition-all ${
+                    distIdx === i
+                      ? 'bg-orange-500/20 border-orange-500/40 text-orange-300'
+                      : 'bg-white/[0.04] border-white/8 text-white/50'
+                  }`}
+                >
+                  {d.label}
+                </button>
+              ))}
+              <button
+                onClick={() => setDistIdx(RACE_DISTANCES.length)}
+                className={`py-3 rounded-xl border text-sm font-semibold transition-all ${
+                  distIdx === RACE_DISTANCES.length
+                    ? 'bg-orange-500/20 border-orange-500/40 text-orange-300'
+                    : 'bg-white/[0.04] border-white/8 text-white/50'
+                }`}
+              >
+                Other
+              </button>
+            </div>
+            {distIdx === RACE_DISTANCES.length && (
+              <input
+                type="number" inputMode="decimal"
+                value={customDist}
+                onChange={e => setCustomDist(e.target.value)}
+                placeholder="Distance in km"
+                className="mt-2 w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-sm text-white outline-none focus:border-white/25"
+              />
+            )}
+          </div>
+
+          {/* Race date */}
+          <div>
+            <p className="text-xs font-semibold text-white/40 mb-2">Race Date</p>
+            <input
+              type="date"
+              value={raceDate}
+              min={minDateStr}
+              onChange={e => setRaceDate(e.target.value)}
+              className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-sm text-white outline-none focus:border-white/25 [color-scheme:dark]"
+            />
+          </div>
+
+          {/* Target time */}
+          <div>
+            <p className="text-xs font-semibold text-white/40 mb-1">Target Time <span className="text-white/25 font-normal">(optional)</span></p>
+            <p className="text-[11px] text-white/25 mb-2">Format: mm:ss for 5K/10K · h:mm:ss for longer</p>
+            <input
+              type="text" inputMode="numeric"
+              value={targetTime}
+              onChange={e => setTargetTime(e.target.value)}
+              placeholder="e.g. 25:00 or 1:55:00"
+              className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-sm text-white outline-none focus:border-white/25"
+            />
+          </div>
+
+          {/* Runs per week */}
+          <div>
+            <p className="text-xs font-semibold text-white/40 mb-2">Runs Per Week</p>
+            <div className="flex gap-2">
+              {[2, 3, 4, 5, 6].map(n => (
+                <button
+                  key={n}
+                  onClick={() => setRunsPerWeek(n)}
+                  className={`flex-1 py-3 rounded-xl border text-sm font-bold transition-all ${
+                    runsPerWeek === n
+                      ? 'bg-orange-500/20 border-orange-500/40 text-orange-300'
+                      : 'bg-white/[0.04] border-white/8 text-white/50'
+                  }`}
+                >
+                  {n}
+                </button>
+              ))}
+            </div>
+            <p className="text-[11px] text-white/25 mt-1.5">
+              {runsPerWeek <= 3 ? 'Great for beginners — quality over quantity.' :
+               runsPerWeek <= 4 ? 'Balanced — the sweet spot for most runners.' :
+               runsPerWeek <= 5 ? 'Intermediate — solid aerobic base required.' :
+               'Advanced — suits runners with strong base mileage.'}
+            </p>
+          </div>
+
+          {/* Program name */}
+          <div>
+            <p className="text-xs font-semibold text-white/40 mb-2">Program Name</p>
+            <input
+              type="text"
+              value={name}
+              onChange={e => setName(e.target.value)}
+              placeholder="e.g. 5K Training 2026"
+              className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-sm text-white outline-none focus:border-white/25"
+            />
+          </div>
+
+          {/* Expert methodology note */}
+          <div className="bg-indigo-500/8 border border-indigo-500/15 rounded-2xl p-4">
+            <p className="text-[10px] font-bold uppercase tracking-widest text-indigo-400/70 mb-2">Coach Methodology</p>
+            <ul className="space-y-1">
+              {[
+                '80/20 polarised training — 80% easy, 20% quality',
+                'VDOT-calibrated pace targets for every session',
+                'Periodised phases: Base → Build → Peak → Taper',
+                '3-week loading cycles with built-in recovery weeks',
+                'Race-appropriate long run caps and taper protocol',
+              ].map((t, i) => (
+                <li key={i} className="flex items-start gap-2 text-xs text-white/45">
+                  <span className="text-indigo-400 mt-0.5 flex-shrink-0">·</span>
+                  {t}
+                </li>
+              ))}
+            </ul>
+          </div>
+        </div>
+
+        {error && <p className="px-5 text-xs text-red-400 py-1">{error}</p>}
+
+        <div className="flex-shrink-0 px-5 pt-3">
+          <button
+            onClick={handleCreate}
+            disabled={saving || !raceDate || !selDist}
+            className="w-full py-4 rounded-2xl text-sm font-bold bg-orange-500/20 border border-orange-500/40 text-orange-300 disabled:opacity-40 active:bg-orange-500/30"
+          >
+            {saving ? 'Building your plan…' : 'Create Training Program'}
+          </button>
+        </div>
+      </motion.div>
+    </motion.div>
+  )
+}
+
 // ─── Main Running Page ─────────────────────────────────────────────────────────
 
 export default function RunningPage() {
-  const [profile,    setProfile]    = useState<RunningProfile | null>(null)
-  const [suggestion, setSuggestion] = useState<RunSuggestion | null>(null)
-  const [logs,       setLogs]       = useState<RunLog[]>([])
-  const [loading,    setLoading]    = useState(true)
+  const [profile,       setProfile]       = useState<RunningProfile | null>(null)
+  const [suggestion,    setSuggestion]    = useState<RunSuggestion | null>(null)
+  const [logs,          setLogs]          = useState<RunLog[]>([])
+  const [activeProgram, setActiveProgram] = useState<ActiveProgram | null | undefined>(undefined)
+  const [loading,       setLoading]       = useState(true)
 
-  const [showNewRun,      setShowNewRun]      = useState(false)
-  const [newRunType,      setNewRunType]      = useState<RunType | undefined>()
-  const [suggestionLoading, setSuggestionLoading] = useState(false)
+  const [showNewRun,         setShowNewRun]         = useState(false)
+  const [showNewProgram,     setShowNewProgram]      = useState(false)
+  const [newRunType,         setNewRunType]          = useState<RunType | undefined>()
+  const [suggestionLoading,  setSuggestionLoading]  = useState(false)
 
   const load = useCallback(async () => {
     setLoading(true)
     try {
-      const [p, s, l] = await Promise.all([
+      const [p, s, l, prog] = await Promise.all([
         api.running.getProfile(),
         api.running.getSuggest(),
         api.running.getLogs(20),
+        api.running.programs.getActive().catch(() => null),
       ])
       setProfile(p)
       setSuggestion(s)
       setLogs(l)
+      setActiveProgram(prog)
     } catch {
       /* silent */
     } finally {
@@ -753,6 +1404,24 @@ export default function RunningPage() {
     } catch {}
   }
 
+  const handleDeleteProgram = async () => {
+    if (!activeProgram) return
+    try {
+      await api.running.programs.delete(activeProgram.id)
+      setActiveProgram(null)
+    } catch {}
+  }
+
+  const handleCompleteDay = async (dayId: number) => {
+    if (!activeProgram) return
+    try {
+      await api.running.programs.complete(activeProgram.id, dayId)
+      // Refresh active program to update completion counts + upcoming list
+      const updated = await api.running.programs.getActive().catch(() => null)
+      setActiveProgram(updated)
+    } catch {}
+  }
+
   return (
     <div className="min-h-screen bg-[#0a0a0a] pb-28">
       {/* Header */}
@@ -762,13 +1431,24 @@ export default function RunningPage() {
             <p className="text-xs text-white/30 font-medium uppercase tracking-widest mb-1">Personal Coach</p>
             <h1 className="text-2xl font-bold tracking-tight">Running</h1>
           </div>
-          <button
-            onClick={() => openNewRun()}
-            className="flex items-center gap-2 px-4 py-2.5 bg-orange-500 rounded-2xl text-sm font-bold text-black active:scale-95 transition-transform"
-          >
-            <Play size={13} />
-            New Run
-          </button>
+          <div className="flex items-center gap-2">
+            {!activeProgram && (
+              <button
+                onClick={() => setShowNewProgram(true)}
+                className="flex items-center gap-1.5 px-3 py-2.5 bg-white/[0.06] border border-white/10 rounded-2xl text-xs font-bold text-white/60 active:bg-white/10"
+              >
+                <Flag size={12} />
+                Program
+              </button>
+            )}
+            <button
+              onClick={() => openNewRun()}
+              className="flex items-center gap-2 px-4 py-2.5 bg-orange-500 rounded-2xl text-sm font-bold text-black active:scale-95 transition-transform"
+            >
+              <Play size={13} />
+              New Run
+            </button>
+          </div>
         </div>
       </div>
 
@@ -780,6 +1460,18 @@ export default function RunningPage() {
         </div>
       ) : (
         <>
+          {/* Active training program */}
+          {activeProgram && (
+            <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }}>
+              <ActiveProgramCard
+                program={activeProgram}
+                onDelete={handleDeleteProgram}
+                onCompleteDay={handleCompleteDay}
+                onNewRun={openNewRun}
+              />
+            </motion.div>
+          )}
+
           {/* Coach suggestion */}
           <AnimatePresence mode="wait">
             {suggestion && !suggestionLoading ? (
@@ -795,7 +1487,16 @@ export default function RunningPage() {
           </AnimatePresence>
 
           {/* Fitness stats */}
-          {profile && <FitnessStats profile={profile} />}
+          {profile && (
+            <div>
+              <FitnessStats profile={profile} />
+              {profile.vdot && profile.estimated_5k_s && (
+                <div className="px-4 -mt-2 mb-4 text-center">
+                  <VdotInfo vdot={profile.vdot} est5kS={profile.estimated_5k_s} />
+                </div>
+              )}
+            </div>
+          )}
 
           {/* Pace zone guide */}
           {profile && <PaceZoneGuide profile={profile} />}
@@ -809,7 +1510,7 @@ export default function RunningPage() {
                 className="text-[10px] text-white/25 active:text-white/50 flex items-center gap-1"
               >
                 <RotateCcw size={10} />
-                Refresh suggestion
+                Refresh
               </button>
             </div>
 
@@ -839,6 +1540,27 @@ export default function RunningPage() {
               </div>
             )}
           </div>
+
+          {/* Start a program CTA (only when no active program and has some data) */}
+          {!activeProgram && profile && (
+            <div className="mx-4 mt-5">
+              <button
+                onClick={() => setShowNewProgram(true)}
+                className="w-full flex items-center justify-between px-4 py-4 bg-white/[0.03] border border-white/[0.07] rounded-2xl active:bg-white/[0.06] transition-colors"
+              >
+                <div className="flex items-center gap-3">
+                  <div className="w-9 h-9 rounded-xl bg-yellow-500/15 flex items-center justify-center">
+                    <Trophy size={15} className="text-yellow-400" />
+                  </div>
+                  <div className="text-left">
+                    <p className="text-sm font-semibold text-white/80">Start a Training Program</p>
+                    <p className="text-xs text-white/35">Race-specific plan built by your coach</p>
+                  </div>
+                </div>
+                <ChevronRight size={16} className="text-white/25" />
+              </button>
+            </div>
+          )}
         </>
       )}
 
@@ -849,6 +1571,16 @@ export default function RunningPage() {
             initialType={newRunType}
             onClose={() => { setShowNewRun(false); setNewRunType(undefined) }}
             onLogged={() => { load(); setShowNewRun(false) }}
+          />
+        )}
+      </AnimatePresence>
+
+      {/* New program sheet */}
+      <AnimatePresence>
+        {showNewProgram && (
+          <NewProgramSheet
+            onClose={() => setShowNewProgram(false)}
+            onCreated={() => { setShowNewProgram(false); load() }}
           />
         )}
       </AnimatePresence>

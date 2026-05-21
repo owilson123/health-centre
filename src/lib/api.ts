@@ -136,6 +136,25 @@ export const api = {
       notes?: string
     }) => post<{ id: number; status: string }>('/running/logs', body),
     deleteLog:   (id: number) => del<{ status: string }>('/running/logs/' + id),
+
+    programs: {
+      create: (body: {
+        name: string
+        race_date: string
+        race_distance_km: number
+        target_time_s?: number
+        runs_per_week: number
+      }) => post<{ id: number; name: string; race_date: string; race_distance_km: number; total_weeks: number; total_days: number }>(
+        '/running/programs', body
+      ),
+      list:      () => get<TrainingProgram[]>('/running/programs'),
+      getActive: () => get<ActiveProgram | null>('/running/programs/active'),
+      calendar:  (start: string, end: string) =>
+        get<PlanDay[]>(`/running/programs/calendar?start=${start}&end=${end}`),
+      complete:  (programId: number, dayId: number) =>
+        patch<{ status: string }>(`/running/programs/${programId}/days/${dayId}/complete`),
+      delete:    (id: number) => del<{ status: string }>('/running/programs/' + id),
+    },
   },
 }
 
@@ -291,4 +310,42 @@ export interface RunLog {
   notes:                string | null
   started_at:           string
   finished_at:          string | null
+}
+
+// ─── Training program types ───────────────────────────────────────────────────
+
+export interface TrainingProgram {
+  id:               number
+  name:             string
+  race_date:        string
+  race_distance_km: number
+  target_time_s:    number | null
+  runs_per_week:    number
+  created_at:       string
+  active:           number
+  total_days:       number
+  completed_days:   number
+}
+
+export interface PlanDay {
+  id:               number
+  program_id:       number
+  plan_date:        string
+  week_number:      number
+  phase:            'Base' | 'Build' | 'Peak' | 'Taper' | 'Race'
+  run_type:         string
+  distance_km:      number
+  pace_target_s_km: number | null
+  notes:            string | null
+  completed:        number
+  actual_log_id:    number | null
+  program_name?:    string
+  race_distance_km?: number
+}
+
+export interface ActiveProgram extends TrainingProgram {
+  days_to_race:   number
+  weeks_to_race:  number
+  upcoming_days:  PlanDay[]
+  last_completed: string | null
 }

@@ -4,10 +4,10 @@ import React, { useState, useEffect, useMemo } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import {
   ChevronLeft, ChevronRight, CalendarDays,
-  Dumbbell, Zap, Timer, Plus, TrendingUp,
+  Dumbbell, Zap, Timer, Plus, TrendingUp, Flag,
 } from 'lucide-react'
 import { useRouter } from 'next/navigation'
-import { api, SessionSummary } from '@/lib/api'
+import { api, SessionSummary, PlanDay } from '@/lib/api'
 import { Activity, TrendDataPoint } from '@/lib/types'
 
 // ─── Date helpers ──────────────────────────────────────────────────────────────
@@ -190,6 +190,69 @@ function SessionCard({ s }: { s: SessionSummary }) {
   )
 }
 
+// ─── Plan day card ─────────────────────────────────────────────────────────────
+
+const PLAN_RUN_CFG: Record<string, { emoji: string; color: string; bg: string; border: string; label: string }> = {
+  easy:     { emoji: '🏃', color: '#22c55e', bg: 'bg-green-500/8',   border: 'border-green-500/20',   label: 'Easy Run' },
+  long:     { emoji: '🛣️', color: '#3b82f6', bg: 'bg-blue-500/8',    border: 'border-blue-500/20',    label: 'Long Run' },
+  tempo:    { emoji: '🔥', color: '#f97316', bg: 'bg-orange-500/8',  border: 'border-orange-500/20',  label: 'Tempo' },
+  interval: { emoji: '⚡', color: '#ef4444', bg: 'bg-red-500/8',     border: 'border-red-500/20',     label: 'Intervals' },
+  recovery: { emoji: '🌿', color: '#10b981', bg: 'bg-emerald-500/8', border: 'border-emerald-500/20', label: 'Recovery' },
+  race:     { emoji: '🏆', color: '#eab308', bg: 'bg-yellow-500/10', border: 'border-yellow-500/30',  label: 'Race Day' },
+}
+const DEFAULT_PLAN_CFG = PLAN_RUN_CFG.easy
+
+function fmtPaceCalendar(s: number): string {
+  const m = Math.floor(s / 60)
+  const sec = s % 60
+  return `${m}:${sec.toString().padStart(2, '0')}`
+}
+
+function PlanDayCard({ day }: { day: PlanDay }) {
+  const cfg = PLAN_RUN_CFG[day.run_type] ?? DEFAULT_PLAN_CFG
+  return (
+    <div className={`rounded-2xl border p-4 ${cfg.bg} ${cfg.border} relative overflow-hidden`}>
+      {day.completed === 1 && (
+        <div className="absolute inset-0 bg-emerald-500/5 flex items-center justify-end pr-4 pointer-events-none">
+          <span className="text-emerald-400/40 text-4xl font-black">✓</span>
+        </div>
+      )}
+      <div className="flex items-start gap-3 relative">
+        <div className="w-10 h-10 rounded-xl flex items-center justify-center text-xl flex-shrink-0"
+             style={{ backgroundColor: `${cfg.color}20` }}>
+          {cfg.emoji}
+        </div>
+        <div className="flex-1 min-w-0">
+          <div className="flex items-start justify-between gap-2">
+            <div>
+              <div className="flex items-center gap-1.5">
+                <span className="text-[9px] font-bold uppercase tracking-widest"
+                      style={{ color: cfg.color }}>
+                  Training Plan
+                </span>
+                <span className="text-[9px] text-white/30">· {day.phase}</span>
+              </div>
+              <p className="text-sm font-semibold text-white leading-tight mt-0.5">{cfg.label}</p>
+            </div>
+            {day.completed === 1 && (
+              <span className="text-[10px] font-bold text-emerald-400 flex-shrink-0">Done ✓</span>
+            )}
+          </div>
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5 mt-1">
+            <span className="text-xs text-white/45">{day.distance_km} km</span>
+            {day.pace_target_s_km && (
+              <span className="text-xs text-white/45">@ {fmtPaceCalendar(day.pace_target_s_km)} /km target</span>
+            )}
+          </div>
+          {day.notes && (
+            <p className="text-xs text-white/35 mt-1.5 leading-snug italic">&ldquo;{day.notes}&rdquo;</p>
+          )}
+        </div>
+      </div>
+    </div>
+  )
+}
+
 // ─── Score pill ────────────────────────────────────────────────────────────────
 
 function ScorePill({ label, value, color }: { label: string; value: number | null; color: string }) {
@@ -206,11 +269,12 @@ function ScorePill({ label, value, color }: { label: string; value: number | nul
 // ─── Day detail panel ──────────────────────────────────────────────────────────
 
 function DayDetail({
-  dateStr, activities, sessions, trend, isToday, isFuture, onPlanWorkout,
+  dateStr, activities, sessions, planDays, trend, isToday, isFuture, onPlanWorkout,
 }: {
   dateStr: string
   activities: Activity[]
   sessions: SessionSummary[]
+  planDays: PlanDay[]
   trend: TrendDataPoint | null
   isToday: boolean
   isFuture: boolean
@@ -219,7 +283,7 @@ function DayDetail({
   // Parse date safely (avoid timezone issues)
   const [year, month, day] = dateStr.split('-').map(Number)
   const d = new Date(year, month - 1, day)
-  const hasData = activities.length > 0 || sessions.length > 0
+  const hasData = activities.length > 0 || sessions.length > 0 || planDays.length > 0
   const hasScores = trend && (trend.recovery !== null || trend.sleep !== null || trend.strain !== null)
 
   return (
@@ -279,6 +343,10 @@ function DayDetail({
         </div>
       ) : (
         <div className="space-y-2.5">
+          {/* Training plan days shown first on future days */}
+          {planDays.map(pd => (
+            <PlanDayCard key={`plan-${pd.id}`} day={pd} />
+          ))}
           {activities.map(act => (
             <ActivityCard key={act.id} act={act} />
           ))}
@@ -294,12 +362,13 @@ function DayDetail({
 // ─── Week strip ────────────────────────────────────────────────────────────────
 
 function WeekStrip({
-  weekStart, selectedDate, activitiesByDate, sessionsByDate, today, onSelect,
+  weekStart, selectedDate, activitiesByDate, sessionsByDate, planDaysByDate, today, onSelect,
 }: {
   weekStart: Date
   selectedDate: string
   activitiesByDate: Record<string, Activity[]>
   sessionsByDate:   Record<string, SessionSummary[]>
+  planDaysByDate:   Record<string, PlanDay[]>
   today: string
   onSelect: (d: string) => void
 }) {
@@ -314,9 +383,17 @@ function WeekStrip({
         const isFuture   = ds > today
         const acts  = activitiesByDate[ds] ?? []
         const sess  = sessionsByDate[ds] ?? []
+        const plans = planDaysByDate[ds]  ?? []
 
         // Unique dot colors (max 3)
         const dotColors: string[] = []
+        // For future days: show plan dots
+        if (isFuture) {
+          plans.forEach(p => {
+            const c = PLAN_RUN_CFG[p.run_type]?.color ?? '#f97316'
+            if (!dotColors.includes(c) && dotColors.length < 3) dotColors.push(c)
+          })
+        }
         acts.forEach(a => {
           const c = typeCfg(a.type).color
           if (!dotColors.includes(c) && dotColors.length < 3) dotColors.push(c)
@@ -334,8 +411,10 @@ function WeekStrip({
                 ? 'bg-indigo-500 shadow-lg'
                 : isToday
                 ? 'bg-white/[0.07] border border-indigo-500/30'
+                : isFuture && plans.length > 0
+                ? 'opacity-75'
                 : isFuture
-                ? 'opacity-35'
+                ? 'opacity-30'
                 : 'hover:bg-white/[0.06]'
             }`}
           >
@@ -485,20 +564,37 @@ export default function CalendarPage() {
   const [activities,   setActivities]   = useState<Activity[]>([])
   const [sessions,     setSessions]     = useState<SessionSummary[]>([])
   const [trends,       setTrends]       = useState<TrendDataPoint[]>([])
+  const [planDays,     setPlanDays]     = useState<PlanDay[]>([])
+  const [programEnd,   setProgramEnd]   = useState<string | null>(null)
   const [loading,      setLoading]      = useState(true)
 
   useEffect(() => {
+    // Load past + current data
     Promise.all([
       api.getActivities(120),
       api.training.getSessions(300),
       api.getTrends(120),
     ]).then(([acts, sess, trnd]) => {
       setActivities(acts)
-      // Only finished sessions
       setSessions((sess as SessionSummary[]).filter(s => s.finished_at))
       setTrends(trnd)
     }).finally(() => setLoading(false))
-  }, [])
+
+    // Load training plan days for the next 6 months
+    const startStr = today
+    const endDate  = new Date()
+    endDate.setMonth(endDate.getMonth() + 6)
+    const endStr = isoDate(endDate)
+    api.running.programs.calendar(startStr, endStr)
+      .then(days => {
+        setPlanDays(days)
+        if (days.length > 0) {
+          const last = days[days.length - 1].plan_date
+          setProgramEnd(last)
+        }
+      })
+      .catch(() => {})
+  }, [today])
 
   const activitiesByDate = useMemo(() => {
     const m: Record<string, Activity[]> = {}
@@ -515,13 +611,21 @@ export default function CalendarPage() {
     return m
   }, [sessions])
 
+  const planDaysByDate = useMemo(() => {
+    const m: Record<string, PlanDay[]> = {}
+    planDays.forEach(p => { ;(m[p.plan_date] ??= []).push(p) })
+    return m
+  }, [planDays])
+
   const trendsByDate = useMemo(() => {
     const m: Record<string, TrendDataPoint> = {}
     trends.forEach(t => { m[t.date] = t })
     return m
   }, [trends])
 
-  const maxFutureWeekStart = mondayOf(addDays(new Date(), 7))
+  // Allow navigation up to the program race date (or 1 week ahead if no program)
+  const maxFutureDate    = programEnd ?? isoDate(addDays(new Date(), 7))
+  const maxFutureWeekStart = mondayOf(new Date(maxFutureDate + 'T12:00:00'))
   const canGoNext = addDays(weekStart, 7) <= maxFutureWeekStart
 
   const goWeek = (delta: number) => {
@@ -529,10 +633,12 @@ export default function CalendarPage() {
     if (delta > 0 && newStart > maxFutureWeekStart) return
     setWeekStart(newStart)
 
-    // Keep the same day-of-week if possible; clamp to today for future days
+    // Keep the same day-of-week if possible
     const dowIndex = (new Date(selectedDate + 'T12:00:00').getDay() + 6) % 7
     const candidate = isoDate(addDays(newStart, dowIndex))
-    setSelectedDate(candidate > today ? today : candidate)
+    // For future days: allow selecting any plan day; otherwise clamp to today
+    const hasPlan = planDaysByDate[candidate]?.length > 0
+    setSelectedDate(!hasPlan && candidate > today ? today : candidate)
   }
 
   const weekEnd = addDays(weekStart, 6)
@@ -548,6 +654,22 @@ export default function CalendarPage() {
         <h1 className="text-2xl font-bold tracking-tight">Calendar</h1>
         <p className="text-sm text-white/40 mt-0.5">Your training week</p>
       </div>
+
+      {/* ── Active program banner ── */}
+      {planDays.length > 0 && (
+        <div className="mx-4 mb-3 flex items-center gap-2.5 px-3.5 py-2.5 bg-orange-500/8 border border-orange-500/20 rounded-2xl">
+          <Flag size={13} className="text-orange-400 flex-shrink-0" />
+          <p className="text-xs text-white/55 flex-1 min-w-0 truncate">
+            Training program active · {planDays.filter(d => d.run_type !== 'race').length} sessions planned
+          </p>
+          <button
+            onClick={() => router.push('/running')}
+            className="text-[10px] font-semibold text-orange-400 flex-shrink-0"
+          >
+            View →
+          </button>
+        </div>
+      )}
 
       {/* ── Week navigation ── */}
       <div className="px-4 pb-2">
@@ -581,6 +703,7 @@ export default function CalendarPage() {
             selectedDate={selectedDate}
             activitiesByDate={activitiesByDate}
             sessionsByDate={sessionsByDate}
+            planDaysByDate={planDaysByDate}
             today={today}
             onSelect={setSelectedDate}
           />
@@ -608,6 +731,7 @@ export default function CalendarPage() {
               dateStr={selectedDate}
               activities={activitiesByDate[selectedDate] ?? []}
               sessions={sessionsByDate[selectedDate] ?? []}
+              planDays={planDaysByDate[selectedDate] ?? []}
               trend={trendsByDate[selectedDate] ?? null}
               isToday={selectedDate === today}
               isFuture={selectedDate > today}
