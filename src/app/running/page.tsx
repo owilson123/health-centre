@@ -5,7 +5,7 @@ import { motion, AnimatePresence } from 'framer-motion'
 import {
   Play, X, Trash2, Clock,
   TrendingUp, Activity, Zap, Heart, MapPin, RotateCcw,
-  Trophy, ChevronRight, Calendar, CheckCircle, Plus, Flag,
+  Trophy, ChevronRight, Calendar, CheckCircle,
 } from 'lucide-react'
 import {
   api, RunType, RunningProfile, RunSuggestion, RunPlan, RunLog,
@@ -826,14 +826,6 @@ function ActiveProgramCard({
   const todayStr = new Date().toISOString().split('T')[0]
   const todayDay = program.upcoming_days.find(d => d.plan_date === todayStr)
   const nextDays  = program.upcoming_days.filter(d => d.plan_date > todayStr).slice(0, 4)
-
-  const raceKm = program.race_distance_km
-  const raceLabel =
-    raceKm <= 6   ? '5K'    :
-    raceKm <= 12  ? '10K'   :
-    raceKm <= 23  ? 'Half Marathon' :
-    raceKm <= 44  ? 'Marathon' :
-    `${raceKm}km Race`
 
   return (
     <div className="mx-4 mb-5">
