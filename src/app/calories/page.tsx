@@ -24,12 +24,6 @@ const MEALS = ['Breakfast', 'Lunch', 'Dinner', 'Snacks']
 const MEAL_EMOJI: Record<string, string> = {
   Breakfast: '🌅', Lunch: '☀️', Dinner: '🌙', Snacks: '🍎',
 }
-const GOAL_TYPES = [
-  { value: 'lose',        label: 'Lose weight' },
-  { value: 'maintain',   label: 'Maintain' },
-  { value: 'gain',       label: 'Gain muscle' },
-  { value: 'performance',label: 'Performance' },
-]
 const ACTIVITY_LEVELS = [
   { value: 'sedentary', label: 'Sedentary' },
   { value: 'light',     label: 'Light' },
@@ -37,6 +31,20 @@ const ACTIVITY_LEVELS = [
   { value: 'active',    label: 'Active' },
   { value: 'very',      label: 'Very active' },
 ]
+
+// Goal type presets: calorie offset vs TDEE, and suggested macro % splits
+const GOAL_PRESETS: Record<string, {
+  label: string; emoji: string; offsetDesc: string
+  calOffset: number; protein: number; carbs: number; fat: number
+}> = {
+  lose:        { label: 'Lose weight',  emoji: '📉', offsetDesc: '−500 kcal deficit', calOffset: -500, protein: 40, carbs: 30, fat: 30 },
+  maintain:    { label: 'Maintain',     emoji: '⚖️', offsetDesc: 'Match your burn',   calOffset: 0,    protein: 30, carbs: 40, fat: 30 },
+  gain:        { label: 'Gain muscle',  emoji: '💪', offsetDesc: '+300 kcal surplus',  calOffset: +300, protein: 35, carbs: 40, fat: 25 },
+  performance: { label: 'Performance',  emoji: '🏆', offsetDesc: '+200 kcal, carb-led', calOffset: +200, protein: 25, carbs: 55, fat: 20 },
+}
+
+// Kcal per gram for each macro
+const KCAL: Record<string, number> = { protein: 4, carbs: 4, fat: 9 }
 
 // ─── MacroRing ─────────────────────────────────────────────────────────────────
 
@@ -418,32 +426,111 @@ function AddFoodSheet({
 
 // ─── GoalsSheet ────────────────────────────────────────────────────────────────
 
+interface GoalsFormState {
+  calories:       number
+  proteinPct:     number
+  carbsPct:       number
+  fatPct:         number
+  goal_type:      string
+  activity_level: string
+}
+
+function pctFromGoals(g: NutritionGoals): { proteinPct: number; carbsPct: number; fatPct: number } {
+  const cal = Math.max(g.calories, 1)
+  return {
+    proteinPct: Math.round((g.protein_g * KCAL.protein / cal) * 100),
+    carbsPct:   Math.round((g.carbs_g   * KCAL.carbs   / cal) * 100),
+    fatPct:     Math.round((g.fat_g     * KCAL.fat     / cal) * 100),
+  }
+}
+
 function GoalsSheet({
   goals,
+  tdee,
   onSave,
   onClose,
 }: {
   goals: NutritionGoals
+  tdee: number
   onSave: (g: NutritionGoals) => Promise<void>
   onClose: () => void
 }) {
-  const [form, setForm] = useState({ ...goals })
+  const [form, setForm] = useState<GoalsFormState>(() => ({
+    calories:       goals.calories,
+    ...pctFromGoals(goals),
+    goal_type:      goals.goal_type,
+    activity_level: goals.activity_level,
+  }))
   const [saving, setSaving] = useState(false)
 
-  const set = (k: keyof NutritionGoals, v: string | number) =>
-    setForm(f => ({ ...f, [k]: v }))
+  // Derived gram values from calories × percentage
+  const protein_g = Math.round(form.calories * form.proteinPct / 100 / KCAL.protein)
+  const carbs_g   = Math.round(form.calories * form.carbsPct   / 100 / KCAL.carbs)
+  const fat_g     = Math.round(form.calories * form.fatPct     / 100 / KCAL.fat)
+  const totalPct  = form.proteinPct + form.carbsPct + form.fatPct
+  const pctOk     = Math.abs(totalPct - 100) <= 1
+
+  // Apply a goal type preset — sets suggested calories AND macro splits
+  const applyPreset = (type: string) => {
+    const preset = GOAL_PRESETS[type]
+    if (!preset) return
+    const baseCal = tdee > 0 ? tdee : 2000
+    const newCal  = Math.max(1200, Math.round(baseCal + preset.calOffset))
+    setForm(f => ({
+      ...f,
+      goal_type:  type,
+      calories:   newCal,
+      proteinPct: preset.protein,
+      carbsPct:   preset.carbs,
+      fatPct:     preset.fat,
+    }))
+  }
+
+  const setPct = (macro: 'proteinPct' | 'carbsPct' | 'fatPct', raw: string) => {
+    const v = parseFloat(raw)
+    if (isNaN(v)) return
+    setForm(f => ({ ...f, [macro]: Math.max(0, Math.min(100, v)) }))
+  }
+
+  // Allow editing grams directly → back-calculates % from new gram value
+  const setGrams = (macro: 'protein' | 'carbs' | 'fat', raw: string) => {
+    const g = parseFloat(raw)
+    if (isNaN(g) || g < 0) return
+    const kcalPerG = KCAL[macro]
+    const newPct = form.calories > 0
+      ? Math.round((g * kcalPerG / form.calories) * 100)
+      : 0
+    const key = macro === 'protein' ? 'proteinPct' : macro === 'carbs' ? 'carbsPct' : 'fatPct'
+    setForm(f => ({ ...f, [key]: Math.max(0, newPct) }))
+  }
 
   const handleSave = async () => {
     setSaving(true)
-    try { await onSave(form) } finally { setSaving(false) }
+    try {
+      await onSave({
+        ...goals,
+        calories:       form.calories,
+        protein_g,
+        carbs_g,
+        fat_g,
+        goal_type:      form.goal_type,
+        activity_level: form.activity_level,
+      })
+    } finally { setSaving(false) }
   }
+
+  const macros = [
+    { key: 'protein' as const, pctKey: 'proteinPct' as const, label: 'Protein', color: '#3b82f6', grams: protein_g },
+    { key: 'carbs'   as const, pctKey: 'carbsPct'   as const, label: 'Carbs',   color: '#22c55e', grams: carbs_g   },
+    { key: 'fat'     as const, pctKey: 'fatPct'     as const, label: 'Fat',     color: '#f97316', grams: fat_g     },
+  ]
 
   return (
     <motion.div className="fixed inset-0 z-50 flex items-end justify-center"
       initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
       <motion.div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={onClose} />
       <motion.div
-        className="relative w-full max-w-lg max-h-[90vh] overflow-y-auto rounded-t-3xl bg-[#111] border-t border-white/10"
+        className="relative w-full max-w-lg max-h-[92vh] overflow-y-auto rounded-t-3xl bg-[#111] border-t border-white/10"
         initial={{ y: '100%' }} animate={{ y: 0 }} exit={{ y: '100%' }}
         transition={{ type: 'spring', damping: 30, stiffness: 300 }}>
 
@@ -452,6 +539,8 @@ function GoalsSheet({
         </div>
 
         <div className="px-5 pb-10 pt-2 space-y-6">
+
+          {/* Header */}
           <div className="flex items-start justify-between">
             <div>
               <p className="text-xs text-white/40 uppercase tracking-wider mb-0.5">Daily targets</p>
@@ -463,31 +552,69 @@ function GoalsSheet({
             </button>
           </div>
 
-          {/* Goal type */}
+          {/* Goal type presets */}
           <div>
             <p className="text-xs text-white/40 uppercase tracking-wider mb-2">Goal type</p>
             <div className="grid grid-cols-2 gap-2">
-              {GOAL_TYPES.map(g => (
-                <button key={g.value}
-                  onClick={() => set('goal_type', g.value)}
-                  className={`py-2.5 px-4 rounded-2xl text-sm font-medium border transition-colors ${
-                    form.goal_type === g.value
-                      ? 'bg-indigo-500/20 border-indigo-500/40 text-indigo-300'
-                      : 'bg-white/5 border-white/8 text-white/50'
-                  }`}>
-                  {g.label}
-                </button>
-              ))}
+              {Object.entries(GOAL_PRESETS).map(([key, preset]) => {
+                const active = form.goal_type === key
+                const targetCal = tdee > 0 ? Math.max(1200, tdee + preset.calOffset) : null
+                return (
+                  <button key={key} onClick={() => applyPreset(key)}
+                    className={`flex flex-col items-start px-3 py-3 rounded-2xl border transition-colors text-left ${
+                      active
+                        ? 'bg-indigo-500/20 border-indigo-500/40'
+                        : 'bg-white/5 border-white/8'
+                    }`}>
+                    <div className="flex items-center gap-1.5 mb-0.5">
+                      <span className="text-base leading-none">{preset.emoji}</span>
+                      <span className={`text-sm font-semibold ${active ? 'text-indigo-300' : 'text-white/70'}`}>
+                        {preset.label}
+                      </span>
+                    </div>
+                    <p className="text-[10px] text-white/30 leading-tight">{preset.offsetDesc}</p>
+                    {targetCal && (
+                      <p className="text-[10px] mt-0.5" style={{ color: active ? '#818cf8' : 'rgba(255,255,255,0.2)' }}>
+                        → {targetCal.toLocaleString()} kcal
+                      </p>
+                    )}
+                  </button>
+                )
+              })}
             </div>
+            {tdee > 0 && (
+              <p className="text-[10px] text-white/25 mt-2 text-center">
+                Based on your Garmin burn today: {Math.round(tdee).toLocaleString()} kcal
+              </p>
+            )}
+          </div>
+
+          {/* Daily calories — large manual input */}
+          <div>
+            <p className="text-xs text-white/40 uppercase tracking-wider mb-2">Daily calories</p>
+            <div className="flex items-center gap-3 px-5 py-4 rounded-2xl bg-white/5 border border-amber-500/20">
+              <div className="w-3 h-3 rounded-full bg-amber-400 shrink-0" />
+              <input
+                type="number"
+                inputMode="numeric"
+                value={form.calories}
+                onChange={e => setForm(f => ({ ...f, calories: parseInt(e.target.value) || 0 }))}
+                className="flex-1 bg-transparent text-2xl font-bold text-white outline-none min-w-0"
+              />
+              <span className="text-sm text-white/40 shrink-0">kcal / day</span>
+            </div>
+            <p className="text-[10px] text-white/25 mt-1.5 px-1">
+              Macros below will recalculate automatically when you change this
+            </p>
           </div>
 
           {/* Activity level */}
           <div>
             <p className="text-xs text-white/40 uppercase tracking-wider mb-2">Activity level</p>
-            <div className="flex gap-2 overflow-x-auto pb-1">
+            <div className="flex gap-2 overflow-x-auto pb-1 scrollbar-hide">
               {ACTIVITY_LEVELS.map(a => (
                 <button key={a.value}
-                  onClick={() => set('activity_level', a.value)}
+                  onClick={() => setForm(f => ({ ...f, activity_level: a.value }))}
                   className={`py-2 px-3 rounded-xl text-xs font-medium border whitespace-nowrap transition-colors ${
                     form.activity_level === a.value
                       ? 'bg-indigo-500/20 border-indigo-500/40 text-indigo-300'
@@ -499,26 +626,70 @@ function GoalsSheet({
             </div>
           </div>
 
-          {/* Macro inputs */}
-          <div className="space-y-3">
-            {[
-              { key: 'calories' as const, label: 'Daily calories', unit: 'kcal', color: '#f59e0b' },
-              { key: 'protein_g' as const, label: 'Protein',        unit: 'g',    color: '#3b82f6' },
-              { key: 'carbs_g' as const,   label: 'Carbohydrates',  unit: 'g',    color: '#22c55e' },
-              { key: 'fat_g' as const,     label: 'Fat',            unit: 'g',    color: '#f97316' },
-            ].map(({ key, label, unit, color }) => (
-              <div key={key} className="flex items-center gap-4 px-4 py-3 rounded-2xl bg-white/5 border border-white/8">
-                <div className="w-3 h-3 rounded-full shrink-0" style={{ backgroundColor: color }} />
-                <span className="flex-1 text-sm text-white/70">{label}</span>
-                <input
-                  type="number"
-                  value={form[key]}
-                  onChange={e => set(key, parseFloat(e.target.value) || 0)}
-                  className="w-20 text-right bg-transparent text-base font-bold text-white outline-none"
-                />
-                <span className="text-xs text-white/30 w-8">{unit}</span>
-              </div>
-            ))}
+          {/* Macro split */}
+          <div>
+            <div className="flex items-center justify-between mb-3">
+              <p className="text-xs text-white/40 uppercase tracking-wider">Macro split</p>
+              <span className={`text-xs font-semibold px-2 py-0.5 rounded-full ${
+                pctOk
+                  ? 'bg-green-500/15 text-green-400'
+                  : 'bg-red-500/15 text-red-400'
+              }`}>
+                {totalPct}% {pctOk ? '✓' : '≠ 100'}
+              </span>
+            </div>
+
+            {/* Visual proportion bar */}
+            <div className="flex h-3 rounded-full overflow-hidden mb-4 gap-0.5">
+              {macros.map(m => (
+                <div key={m.key} className="rounded-full transition-all duration-300"
+                  style={{ backgroundColor: m.color, width: `${m.pctKey === 'proteinPct' ? form.proteinPct : m.pctKey === 'carbsPct' ? form.carbsPct : form.fatPct}%` }} />
+              ))}
+            </div>
+
+            {/* Per-macro rows */}
+            <div className="space-y-3">
+              {macros.map(m => (
+                <div key={m.key} className="rounded-2xl bg-white/5 border border-white/8 p-3">
+                  <div className="flex items-center gap-2 mb-2.5">
+                    <div className="w-2.5 h-2.5 rounded-full shrink-0" style={{ backgroundColor: m.color }} />
+                    <span className="text-sm font-medium flex-1">{m.label}</span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    {/* % input with stepper */}
+                    <div className="flex items-center rounded-xl bg-white/5 border border-white/10 overflow-hidden">
+                      <button
+                        onClick={() => setPct(m.pctKey, String((form[m.pctKey] - 5)))}
+                        className="px-2.5 py-2 text-white/40 active:bg-white/10 text-sm font-bold">−</button>
+                      <input
+                        type="number"
+                        value={form[m.pctKey]}
+                        onChange={e => setPct(m.pctKey, e.target.value)}
+                        className="w-10 text-center bg-transparent text-sm font-bold text-white outline-none"
+                      />
+                      <button
+                        onClick={() => setPct(m.pctKey, String(form[m.pctKey] + 5))}
+                        className="px-2.5 py-2 text-white/40 active:bg-white/10 text-sm font-bold">+</button>
+                    </div>
+                    <span className="text-xs text-white/30">%</span>
+                    <span className="text-white/20 mx-1">=</span>
+                    {/* Gram input — editable, back-calculates % */}
+                    <div className="flex-1 flex items-center gap-1.5 px-3 py-2 rounded-xl bg-white/5 border border-white/10">
+                      <input
+                        type="number"
+                        value={m.grams}
+                        onChange={e => setGrams(m.key, e.target.value)}
+                        className="w-full bg-transparent text-sm font-bold text-white outline-none text-right"
+                      />
+                      <span className="text-xs text-white/30 shrink-0">g</span>
+                    </div>
+                    <span className="text-[10px] text-white/20 shrink-0 w-16 text-right">
+                      {Math.round(m.grams * KCAL[m.key])} kcal
+                    </span>
+                  </div>
+                </div>
+              ))}
+            </div>
           </div>
 
           <button
@@ -839,6 +1010,7 @@ export default function NutritionPage() {
           <GoalsSheet
             key="goals"
             goals={goals}
+            tdee={diary?.calorie_balance.burned ?? 0}
             onSave={handleSaveGoals}
             onClose={() => setShowGoals(false)}
           />
